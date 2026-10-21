@@ -8,3 +8,7 @@ venv
 .git
 .env
 .env.*
+*.db
+*.db-*
+app/tests
+scripts

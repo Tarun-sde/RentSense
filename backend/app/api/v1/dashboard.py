@@ -5,7 +5,7 @@ from app.db.session import get_db
 from app.models import Equipment, Alert
 from app.schemas.dashboard import DashboardKPIResponse
 from app.services.status_service import derive_status, calculate_utilization, EquipmentStatus
-from app.services.equipment_service import get_current_rental, get_latest_telemetry
+from app.services.equipment_service import get_current_rental, get_latest_telemetry, fleet_query, load_fleet
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -16,7 +16,7 @@ def get_dashboard_kpis(db: Session = Depends(get_db)):
     Calculate and return real-time fleet KPI metrics and operational status distribution
     for the Control Tower dashboard overview.
     """
-    equipment_records = db.query(Equipment).all()
+    equipment_records = load_fleet(fleet_query(db))
     status_counts = defaultdict(int)
 
     utilization_values = []

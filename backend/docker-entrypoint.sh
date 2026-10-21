@@ -1,25 +1,18 @@
 #!/bin/sh
 set -eu
 
-python -m alembic upgrade head
+if [ "${RUN_MIGRATIONS:-true}" = "true" ]; then
+    python -m alembic upgrade head
+fi
 
 python - <<'PY'
 import os
 from app.db.session import SessionLocal
-from sqlalchemy import text
 from app.seed.seed import seed_database
 
-db = SessionLocal()
-try:
-    has_equipment = db.execute(text("SELECT to_regclass('public.equipment') IS NOT NULL")).scalar()
-    if not has_equipment:
-        seed_database(db, reset=True)
-    else:
-        equipment_count = db.execute(text("SELECT COUNT(*) FROM equipment")).scalar()
-        if equipment_count == 0:
-            seed_database(db, reset=True)
-finally:
-    db.close()
+if os.getenv("SEED_DEMO_DATA", "false").lower() == "true":
+    with SessionLocal() as db:
+        seed_database(db)
 PY
 
 python - <<'PY'

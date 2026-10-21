@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import {
   DollarSign,
@@ -20,38 +20,18 @@ import { AppShell } from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { MetricCard } from "@/components/ui/MetricCard";
 import { TableSkeleton } from "@/components/ui/SkeletonLoader";
-import { fetchImpactSummary, fetchSites } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { QueryError } from "@/components/ui/QueryError";
 import { ImpactSummary, Site } from "@/types";
-import { cn, getErrorMessage, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 
 export default function ImpactPage() {
-  const [summary, setSummary] = useState<ImpactSummary | null>(null);
-  const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string>("ALL");
-  const [loading, setLoading] = useState(true);
-  const [, setError] = useState<string | null>(null);
-
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [sumData, sitesData] = await Promise.all([
-        fetchImpactSummary(selectedSiteId !== "ALL" ? { site_id: selectedSiteId } : undefined),
-        fetchSites(),
-      ]);
-      setSummary(sumData);
-      setSites(sitesData);
-    } catch (err: unknown) {
-      console.error("Error loading impact summary:", err);
-      setError(getErrorMessage(err, "Failed to load financial impact data"));
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedSiteId]);
-
-  useEffect(() => {
-    queueMicrotask(() => void loadData());
-  }, [loadData]);
+  const impactQuery = useApiQuery<ImpactSummary>(`/impact${selectedSiteId === "ALL" ? "" : `?site_id=${encodeURIComponent(selectedSiteId)}`}`);
+  const sitesQuery = useApiQuery<Site[]>("/sites");
+  const summary = impactQuery.data;
+  const sites = sitesQuery.data ?? [];
+  const loading = impactQuery.isPending;
 
   const totalRealized = summary?.total_realized_savings || 0;
   const totalEstimated = summary?.total_estimated_impact || 0;
@@ -71,6 +51,8 @@ export default function ImpactPage() {
 
   return (
     <AppShell>
+      <QueryError error={impactQuery.error} retry={impactQuery.refetch} />
+      <QueryError error={sitesQuery.error} retry={sitesQuery.refetch} />
       {/* Header */}
       <section className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-black/10">
         <div>
@@ -93,7 +75,7 @@ export default function ImpactPage() {
 
         <div className="flex items-center gap-2 rounded-xl border border-black/10 bg-white/70 px-3.5 py-2 shadow-sm text-xs font-mono">
           <DollarSign className="size-4 text-[#ff5a24]" />
-          <span className="text-black font-semibold">Realized: {formatCurrency(totalRealized, { showDecimals: true })}</span>
+          <span className="text-black font-semibold">Realized: {summary ? formatCurrency(totalRealized, { showDecimals: true }) : "—"}</span>
         </div>
       </section>
 
@@ -101,7 +83,7 @@ export default function ImpactPage() {
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5 mb-10">
         <MetricCard
           title="Total Realized Savings"
-          value={formatCurrency(totalRealized)}
+          value={summary ? formatCurrency(totalRealized) : "—"}
           subtext="Verified from completed actions"
           trend="Realized ROI"
           trendPositive={true}
@@ -110,7 +92,7 @@ export default function ImpactPage() {
         />
         <MetricCard
           title="Total Estimated Impact"
-          value={formatCurrency(totalEstimated)}
+          value={summary ? formatCurrency(totalEstimated) : "—"}
           subtext="Potential savings from open recs"
           trend="Projected"
           trendPositive={true}
@@ -119,7 +101,7 @@ export default function ImpactPage() {
         />
         <MetricCard
           title="Completed Operations"
-          value={completedCount}
+          value={summary ? completedCount : "—"}
           subtext="Interventions executed & resolved"
           trend="Verified"
           trendPositive={true}
@@ -128,7 +110,7 @@ export default function ImpactPage() {
         />
         <MetricCard
           title="Avg Savings / Action"
-          value={formatCurrency(avgSavingsPerAction)}
+          value={summary ? formatCurrency(avgSavingsPerAction) : "—"}
           subtext="Per operational resolution"
           trend="High Efficiency"
           trendPositive={true}

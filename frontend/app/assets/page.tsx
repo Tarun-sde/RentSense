@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AssetCard } from "@/components/assets/AssetCard";
@@ -8,39 +8,24 @@ import { AddEquipmentModal } from "@/components/assets/AddEquipmentModal";
 import { EquipmentTable } from "@/components/dashboard/EquipmentTable";
 import { CardSkeleton, TableSkeleton } from "@/components/ui/SkeletonLoader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { fetchEquipmentList } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { QueryError } from "@/components/ui/QueryError";
 import { EquipmentListItem } from "@/types";
 import { LayoutGrid, List, Search, Plus } from "lucide-react";
-import { cn, getErrorMessage, formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 
 export default function AssetsPage() {
-  const [equipmentList, setEquipmentList] = useState<EquipmentListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const equipmentQuery = useApiQuery<EquipmentListItem[]>("/equipment");
+  const equipmentList = equipmentQuery.data ?? [];
+  const loading = equipmentQuery.isPending;
+  const error = equipmentQuery.error;
+  const loadEquipment = () => equipmentQuery.refetch();
   const [showAddModal, setShowAddModal] = useState(false);
 
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusTab, setStatusTab] = useState("ALL");
   const [typeFilter, setTypeFilter] = useState("ALL");
-
-  const loadEquipment = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const data = await fetchEquipmentList();
-      setEquipmentList(data);
-    } catch (err: unknown) {
-      console.error("Failed to load equipment list:", err);
-      setError(getErrorMessage(err, "Failed to load equipment catalog"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    queueMicrotask(() => void loadEquipment());
-  }, [loadEquipment]);
 
   // Compute summary stats
   const totalDailyRate = equipmentList.reduce((acc, eq) => acc + eq.daily_rate, 0);
@@ -68,6 +53,7 @@ export default function AssetsPage() {
 
   return (
     <AppShell>
+      <QueryError error={error} retry={loadEquipment} />
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
         <div>
@@ -134,7 +120,7 @@ export default function AssetsPage() {
             className="text-3xl font-medium text-black mt-2 leading-none"
             style={{ fontFamily: "var(--font-playfair), Georgia, serif" }}
           >
-            {equipmentList.length}
+            {equipmentQuery.data ? equipmentList.length : "—"}
           </p>
           <span className="text-[11px] text-[#888] mt-2">Total registered fleet</span>
         </GlassCard>
@@ -145,7 +131,7 @@ export default function AssetsPage() {
             className="text-3xl font-medium text-black mt-2 leading-none font-mono"
             style={{ fontFamily: "var(--font-playfair), Georgia, serif" }}
           >
-            {formatCurrency(totalDailyRate)}
+            {equipmentQuery.data ? formatCurrency(totalDailyRate) : "—"}
           </p>
           <span className="text-[11px] text-[#888] mt-2">Active fleet day-rate</span>
         </GlassCard>
@@ -156,7 +142,7 @@ export default function AssetsPage() {
             className="text-3xl font-medium text-emerald-700 mt-2 leading-none"
             style={{ fontFamily: "var(--font-playfair), Georgia, serif" }}
           >
-            {activeCount} Units
+            {equipmentQuery.data ? activeCount : "—"} Units
           </p>
           <span className="text-[11px] text-emerald-600 mt-2">Optimal runtime efficiency</span>
         </GlassCard>
@@ -167,7 +153,7 @@ export default function AssetsPage() {
             className="text-3xl font-medium text-amber-600 mt-2 leading-none"
             style={{ fontFamily: "var(--font-playfair), Georgia, serif" }}
           >
-            {idleCount} Units
+            {equipmentQuery.data ? idleCount : "—"} Units
           </p>
           <span className="text-[11px] text-amber-600 mt-2">&gt;8h idle accumulation</span>
         </GlassCard>
@@ -235,10 +221,10 @@ export default function AssetsPage() {
           ) : (
             <TableSkeleton />
           )
-        ) : error ? (
+        ) : error && !equipmentQuery.data ? (
           <EmptyState
             title="Failed to Load Fleet Registry"
-            description={error}
+            description={error.message}
             actionText="Retry"
             onAction={loadEquipment}
           />
@@ -268,7 +254,7 @@ export default function AssetsPage() {
       <AddEquipmentModal
         isOpen={showAddModal}
         onClose={() => setShowAddModal(false)}
-        onSuccess={() => void loadEquipment()}
+        onSuccess={() => setShowAddModal(false)}
       />
     </AppShell>
   );

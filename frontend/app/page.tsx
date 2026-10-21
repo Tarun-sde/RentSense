@@ -1,152 +1,51 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React from "react";
+import dynamic from "next/dynamic";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { QueryError } from "@/components/ui/QueryError";
 import { AppShell } from "@/components/layout/AppShell";
 import { HeroOverview } from "@/components/dashboard/HeroOverview";
 import { MetricCard } from "@/components/ui/MetricCard";
-import { FleetStatusDonut } from "@/components/dashboard/FleetStatusDonut";
-import { FleetMapCard } from "@/components/dashboard/FleetMapCard";
+const FleetStatusDonut = dynamic(() => import("@/components/dashboard/FleetStatusDonut").then(m => m.FleetStatusDonut), { loading: () => <CardSkeleton /> });
+const FleetMapCard = dynamic(() => import("@/components/dashboard/FleetMapCard").then(m => m.FleetMapCard), { ssr: false, loading: () => <div className="h-96 animate-pulse rounded-2xl bg-black/5" /> });
 import { AlertsPanel } from "@/components/dashboard/AlertsPanel";
 import { RecommendationsPanel } from "@/components/dashboard/RecommendationsPanel";
 import { ActivityTimeline } from "@/components/dashboard/ActivityTimeline";
 import { EquipmentTable } from "@/components/dashboard/EquipmentTable";
 import { CardSkeleton, TableSkeleton } from "@/components/ui/SkeletonLoader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { fetchDashboardKPIs, fetchEquipmentList, fetchAlerts, fetchRecommendations } from "@/lib/api";
 import { useTelemetryStream } from "@/lib/useTelemetryStream";
-import { DashboardKPIs, EquipmentListItem, TelemetryStreamEvent, Telemetry, Alert, Recommendation } from "@/types";
-import { getErrorMessage } from "@/lib/utils";
+import { DashboardKPIs, EquipmentListItem, Alert, Recommendation } from "@/types";
 
 export default function DashboardPage() {
-  const [kpis, setKpis] = useState<DashboardKPIs | null>(null);
-  const [equipmentList, setEquipmentList] = useState<EquipmentListItem[]>([]);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Initial load
-  const loadInitialData = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [kpiRes, eqRes, alertRes, recRes] = await Promise.all([
-        fetchDashboardKPIs(),
-        fetchEquipmentList(),
-        fetchAlerts({ status: "OPEN" }).catch(() => []),
-        fetchRecommendations({ status: "PENDING" }).catch(() => []),
-      ]);
-      setKpis(kpiRes);
-      setEquipmentList(eqRes);
-      setAlerts(alertRes);
-      setRecommendations(recRes);
-    } catch (err: unknown) {
-      console.error("Dashboard data load error:", err);
-      setError(getErrorMessage(err, "Failed to load fleet data"));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-
-
-  useEffect(() => {
-    queueMicrotask(() => void loadInitialData());
-  }, []);
-
-  // Handle incoming real-time telemetry events from SSE
-  const handleLiveTelemetry = useCallback((event: TelemetryStreamEvent) => {
-    setEquipmentList((prevList) => {
-      let statusChanged = false;
-      const updatedList = prevList.map((item) => {
-        if (item.id === event.equipment_id) {
-          if (item.status !== event.status) {
-            statusChanged = true;
-          }
-          const updatedTelemetry: Telemetry = {
-            equipment_id: event.equipment_id,
-            timestamp: typeof event.timestamp === "string" ? event.timestamp : new Date(event.timestamp).toISOString(),
-            latitude: event.latitude,
-            longitude: event.longitude,
-            engine_hours: event.engine_hours,
-            idle_hours: event.idle_hours,
-            fuel_pct: event.fuel_pct,
-          };
-          return {
-            ...item,
-            status: event.status,
-            utilization_rate: event.utilization_rate,
-            latest_telemetry: updatedTelemetry,
-          };
-        }
-        return item;
-      });
-
-      // Recalculate KPIs locally if status changed
-      if (statusChanged) {
-        setKpis((prevKpis) => {
-          if (!prevKpis) return prevKpis;
-          const statusCounts: Record<string, number> = {};
-          let active = 0;
-          let idle = 0;
-          let due_soon = 0;
-          let overdue = 0;
-          let unassigned = 0;
-
-          updatedList.forEach((eq) => {
-            const st = eq.status.toUpperCase();
-            statusCounts[st] = (statusCounts[st] || 0) + 1;
-            if (st === "ACTIVE") active++;
-            else if (st === "IDLE") idle++;
-            else if (st === "DUE_SOON") due_soon++;
-            else if (st === "OVERDUE") overdue++;
-            else if (st === "UNASSIGNED") unassigned++;
-          });
-
-          return {
-            ...prevKpis,
-            active,
-            idle,
-            due_soon,
-            overdue,
-            unassigned,
-            status_counts: statusCounts,
-          };
-        });
-      }
-
-      return updatedList;
-    });
-  }, []);
-
-  // Handle fallback polling updates
-  const handleFullRefresh = useCallback((data: { equipment: EquipmentListItem[]; kpis: DashboardKPIs }) => {
-    setEquipmentList(data.equipment);
-    setKpis(data.kpis);
-  }, []);
-
-  // Realtime hook
-  const { connectionState } = useTelemetryStream({
-    onTelemetry: handleLiveTelemetry,
-    onFullRefresh: handleFullRefresh,
-    enabled: !loading && !error,
-  });
+  const kpiQuery = useApiQuery<DashboardKPIs>("/dashboard");
+  const equipmentQuery = useApiQuery<EquipmentListItem[]>("/equipment");
+  const alertsQuery = useApiQuery<Alert[]>("/alerts?status=OPEN");
+  const recommendationsQuery = useApiQuery<Recommendation[]>("/recommendations?status=PENDING");
+  const kpis = kpiQuery.data;
+  const equipmentList = equipmentQuery.data ?? [];
+  const alerts = alertsQuery.data ?? [];
+  const recommendations = recommendationsQuery.data ?? [];
+  const { connectionState } = useTelemetryStream();
+  const loadInitialData = () => Promise.all([kpiQuery.refetch(), equipmentQuery.refetch(), alertsQuery.refetch(), recommendationsQuery.refetch()]);
 
   return (
     <AppShell
-      openAlertsCount={kpis?.open_alerts ?? 4}
+      openAlertsCount={kpis?.open_alerts ?? 0}
       connectionState={connectionState}
     >
+      <QueryError error={kpiQuery.error} retry={kpiQuery.refetch} />
       {/* Hero Overview */}
       <HeroOverview
-        fleetUtilizationPct={kpis?.fleet_utilization_pct ?? 63.2}
-        totalAssets={kpis?.total_equipment ?? equipmentList.length}
-        activeAssets={kpis?.active ?? 2}
+        fleetUtilizationPct={kpis?.fleet_utilization_pct}
+        totalAssets={kpis?.total_equipment}
+        activeAssets={kpis?.active}
       />
 
       {/* KPI Cards Grid */}
       <section className="mb-10">
-        {loading ? (
+        {kpiQuery.isPending ? (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-5">
             {[...Array(5)].map((_, i) => (
               <CardSkeleton key={i} />
@@ -156,7 +55,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-5">
             <MetricCard
               title="Active Fleet"
-              value={kpis?.active ?? 2}
+              value={kpis?.active ?? "—"}
               subtext="Under active rental contract"
               trend="In Production"
               trendPositive={true}
@@ -165,7 +64,7 @@ export default function DashboardPage() {
             />
             <MetricCard
               title="Idle Units"
-              value={kpis?.idle ?? 1}
+              value={kpis?.idle ?? "—"}
               subtext="High idle hours (>8h)"
               trend="Requires Action"
               trendPositive={false}
@@ -174,7 +73,7 @@ export default function DashboardPage() {
             />
             <MetricCard
               title="Due Soon"
-              value={kpis?.due_soon ?? 1}
+              value={kpis?.due_soon ?? "—"}
               subtext="Expiring within 48 hours"
               trend="Expiring"
               trendPositive={false}
@@ -183,7 +82,7 @@ export default function DashboardPage() {
             />
             <MetricCard
               title="Overdue"
-              value={kpis?.overdue ?? 1}
+              value={kpis?.overdue ?? "—"}
               subtext="Surcharge accumulating"
               trend="Critical Surcharge"
               trendPositive={false}
@@ -192,7 +91,7 @@ export default function DashboardPage() {
             />
             <MetricCard
               title="Unassigned"
-              value={kpis?.unassigned ?? 2}
+              value={kpis?.unassigned ?? "—"}
               subtext="Missing operator or yard"
               trend="Off-Rent"
               trendPositive={true}
@@ -206,18 +105,10 @@ export default function DashboardPage() {
       {/* Center Section: Donut + Tactical Map */}
       <section className="mb-10 grid lg:grid-cols-3 gap-8 items-stretch">
         <div className="lg:col-span-1">
-          <FleetStatusDonut
-            statusCounts={
-              kpis?.status_counts || {
-                ACTIVE: 2,
-                IDLE: 1,
-                DUE_SOON: 1,
-                OVERDUE: 1,
-                UNASSIGNED: 2,
-              }
-            }
-            totalEquipment={kpis?.total_equipment || 7}
-          />
+          {kpis ? <FleetStatusDonut
+            statusCounts={kpis?.status_counts ?? {}}
+            totalEquipment={kpis.total_equipment}
+          /> : <CardSkeleton />}
         </div>
         <div className="lg:col-span-2">
           <FleetMapCard equipmentList={equipmentList} />
@@ -227,12 +118,14 @@ export default function DashboardPage() {
       {/* Triad Intelligence Section: Alerts + Recommendations + Timeline */}
       <section className="mb-10 grid md:grid-cols-2 lg:grid-cols-3 gap-8 items-stretch">
         <div>
+          <QueryError error={alertsQuery.error} retry={alertsQuery.refetch} />
           <AlertsPanel alerts={alerts} />
         </div>
         <div>
+          <QueryError error={recommendationsQuery.error} retry={recommendationsQuery.refetch} />
           <RecommendationsPanel
             recommendations={recommendations}
-            onActionTriggered={loadInitialData}
+
           />
         </div>
         <div>
@@ -241,13 +134,14 @@ export default function DashboardPage() {
       </section>
 
       {/* Fleet Ledger Table */}
+      <QueryError error={equipmentQuery.error} retry={equipmentQuery.refetch} />
       <section className="mb-12">
-        {loading ? (
+        {equipmentQuery.isPending ? (
           <TableSkeleton />
-        ) : error ? (
+        ) : equipmentQuery.error && !equipmentQuery.data ? (
           <EmptyState
             title="Unable to Load Equipment Ledger"
-            description="The connection to the RentSense backend API failed. Ensure the server is running on http://localhost:8000."
+            description="Fleet data is temporarily unavailable. Please retry."
             actionText="Retry Connection"
             onAction={loadInitialData}
           />

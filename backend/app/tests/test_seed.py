@@ -10,7 +10,7 @@ def test_seed_counts_and_idempotency():
     db = SessionLocal()
     try:
         # Run seed
-        seed_database(db, reset=True)
+        seed_database(db, reset=True, anchor_time=ANCHOR_TIME)
 
         eq_count = db.query(Equipment).count()
         site_count = db.query(Site).count()
@@ -55,7 +55,7 @@ def test_seed_counts_and_idempotency():
 def test_challenge_asset_scenarios():
     db = SessionLocal()
     try:
-        seed_database(db, reset=True)
+        seed_database(db, reset=True, anchor_time=ANCHOR_TIME)
         now = ANCHOR_TIME
 
         # 1. EQX1001: Under-utilized / Low utilization -> IDLE

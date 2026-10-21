@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
 import {
   Zap,
@@ -16,24 +16,25 @@ import { GlassCard } from "@/components/ui/GlassCard";
 import { MetricCard } from "@/components/ui/MetricCard";
 import { TableSkeleton } from "@/components/ui/SkeletonLoader";
 import {
-  fetchActions,
   completeAction,
   cancelAction,
   createAction,
-  fetchSites,
-  fetchEquipmentList,
 } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { QueryError } from "@/components/ui/QueryError";
 import { Action, Site, EquipmentListItem } from "@/types";
 import { cn, getErrorMessage } from "@/lib/utils";
 
 export default function ActionsPage() {
-  const [actions, setActions] = useState<Action[]>([]);
-  const [sites, setSites] = useState<Site[]>([]);
-  const [equipmentList, setEquipmentList] = useState<EquipmentListItem[]>([]);
+  const actionsQuery = useApiQuery<Action[]>("/actions");
+  const sitesQuery = useApiQuery<Site[]>("/sites");
+  const equipmentQuery = useApiQuery<EquipmentListItem[]>("/equipment");
+  const actions = actionsQuery.data ?? [];
+  const sites = sitesQuery.data ?? [];
+  const equipmentList = equipmentQuery.data ?? [];
+  const loading = actionsQuery.isPending;
   const [selectedStatus, setSelectedStatus] = useState<string>("ALL");
   const [selectedType, setSelectedType] = useState<string>("ALL");
-  const [loading, setLoading] = useState(true);
-  const [, setError] = useState<string | null>(null);
 
   // Complete Action Modal State
   const [completingAction, setCompletingAction] = useState<Action | null>(null);
@@ -48,30 +49,6 @@ export default function ActionsPage() {
   const [newType, setNewType] = useState("REASSIGN");
   const [newPriority, setNewPriority] = useState("HIGH");
   const [newNotes, setNewNotes] = useState("");
-
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [actionsData, sitesData, eqData] = await Promise.all([
-        fetchActions(),
-        fetchSites(),
-        fetchEquipmentList(),
-      ]);
-      setActions(actionsData);
-      setSites(sitesData);
-      setEquipmentList(eqData);
-    } catch (err: unknown) {
-      console.error("Error loading actions:", err);
-      setError(getErrorMessage(err, "Failed to load operational actions"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    queueMicrotask(() => void loadData());
-  }, [loadData]);
 
   const handleCompleteSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,7 +71,6 @@ export default function ActionsPage() {
 
       setCompletingAction(null);
       setCompleteNotes("");
-      await loadData();
     } catch (err: unknown) {
       alert(`Error completing action: ${getErrorMessage(err, "Unknown error")}`);
     } finally {
@@ -109,7 +85,6 @@ export default function ActionsPage() {
         reason: "Operator dismissed from Action Queue",
         actor: "Commander Marcus Vance",
       });
-      await loadData();
     } catch (err: unknown) {
       alert(`Error cancelling action: ${getErrorMessage(err, "Unknown error")}`);
     }
@@ -128,7 +103,6 @@ export default function ActionsPage() {
       });
       setNewActionModalOpen(false);
       setNewNotes("");
-      await loadData();
     } catch (err: unknown) {
       alert(`Error creating action: ${getErrorMessage(err, "Unknown error")}`);
     } finally {
@@ -173,6 +147,9 @@ export default function ActionsPage() {
 
   return (
     <AppShell>
+      <QueryError error={actionsQuery.error} retry={actionsQuery.refetch} />
+      <QueryError error={sitesQuery.error} retry={sitesQuery.refetch} />
+      <QueryError error={equipmentQuery.error} retry={equipmentQuery.refetch} />
       {/* Header */}
       <section className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-black/10">
         <div>
@@ -206,7 +183,7 @@ export default function ActionsPage() {
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5 mb-10">
         <MetricCard
           title="Active Actions"
-          value={pendingCount}
+          value={actionsQuery.data ? pendingCount : "—"}
           subtext="Requiring operator execution"
           trend="Actionable"
           trendPositive={true}
@@ -215,7 +192,7 @@ export default function ActionsPage() {
         />
         <MetricCard
           title="Completed Interventions"
-          value={completedCount}
+          value={actionsQuery.data ? completedCount : "—"}
           subtext="Fully verified & state updated"
           trend="Saved Impact"
           trendPositive={true}
@@ -224,7 +201,7 @@ export default function ActionsPage() {
         />
         <MetricCard
           title="Total Action Ledger"
-          value={actions.length}
+          value={actionsQuery.data ? actions.length : "—"}
           subtext="Audited operations"
           trend="Surveillance"
           trendPositive={true}

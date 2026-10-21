@@ -6,7 +6,7 @@ from sqlalchemy import desc
 
 from app.models import Equipment, Rental, Telemetry
 from app.services.status_service import derive_status, calculate_utilization
-from app.services.equipment_service import get_current_rental
+from app.services.equipment_service import get_current_rental, get_latest_telemetry, fleet_query, load_fleet
 
 # Operational Threshold Constants
 IDLE_HOURS_THRESHOLD = 8.0
@@ -317,7 +317,7 @@ def evaluate_equipment_anomalies(
     """
     current_time = now or datetime.now(timezone.utc)
     current_rental = rental or get_current_rental(equipment)
-    tel = latest_telemetry or (equipment.telemetry[0] if getattr(equipment, "telemetry", None) else None)
+    tel = latest_telemetry or get_latest_telemetry(equipment)
     
     anomalies: List[AnomalyResult] = []
 
@@ -364,16 +364,11 @@ def evaluate_fleet_anomalies(db: Session, now: Optional[datetime] = None) -> Lis
     """
     Evaluate anomaly rules across the entire fleet in the database.
     """
-    equipment_list = db.query(Equipment).all()
+    equipment_list = load_fleet(fleet_query(db))
     fleet_anomalies: List[AnomalyResult] = []
 
     for eq in equipment_list:
-        latest_tel = (
-            db.query(Telemetry)
-            .filter(Telemetry.equipment_id == eq.id)
-            .order_by(desc(Telemetry.timestamp))
-            .first()
-        )
+        latest_tel = get_latest_telemetry(eq)
         current_rent = get_current_rental(eq)
         eq_anomalies = evaluate_equipment_anomalies(
             equipment=eq,

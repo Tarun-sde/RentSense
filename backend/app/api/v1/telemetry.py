@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.db.session import get_db
@@ -30,6 +31,12 @@ async def ingest_telemetry(
     payload: TelemetryIngestRequest,
     db: Session = Depends(get_db),
 ):
+    record, event = await run_in_threadpool(_persist_telemetry, payload, db)
+    await connection_manager.broadcast("telemetry", event)
+    return record
+
+
+def _persist_telemetry(payload: TelemetryIngestRequest, db: Session):
     """
     Ingest a real-time telemetry point for an equipment asset.
     Validates physical parameters, stores in database, recalculates derived status,
@@ -75,6 +82,7 @@ async def ingest_telemetry(
         )
         sync_equipment_alerts(db, equipment.id, anomalies, now=ts)
     except Exception as e:
+        db.rollback()
         logger.warning(f"Failed to sync anomalies for equipment {equipment.id}: {e}")
 
     stream_event = TelemetryStreamEvent(
@@ -89,10 +97,7 @@ async def ingest_telemetry(
         status=derived_status.value,
     )
 
-    # Broadcast to SSE clients asynchronously
-    await connection_manager.broadcast("telemetry", stream_event.model_dump(mode="json"))
-
-    return TelemetryResponse.model_validate(telemetry_record)
+    return TelemetryResponse.model_validate(telemetry_record), stream_event.model_dump(mode="json")
 
 
 @router.get("/equipment/{id}/telemetry/latest", response_model=TelemetryResponse)
@@ -111,7 +116,7 @@ def get_latest_equipment_telemetry(
     latest = (
         db.query(Telemetry)
         .filter(Telemetry.equipment_id == id)
-        .order_by(desc(Telemetry.timestamp))
+        .order_by(desc(Telemetry.timestamp), Telemetry.id.desc())
         .first()
     )
     if not latest:
@@ -127,6 +132,7 @@ def get_latest_equipment_telemetry(
 def get_equipment_telemetry_history(
     id: str,
     limit: int = Query(100, ge=1, le=1000, description="Max telemetry history records to return"),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """Retrieve chronologically ordered historical telemetry for an asset."""
@@ -140,7 +146,8 @@ def get_equipment_telemetry_history(
     records = (
         db.query(Telemetry)
         .filter(Telemetry.equipment_id == id)
-        .order_by(desc(Telemetry.timestamp))
+        .order_by(desc(Telemetry.timestamp), Telemetry.id.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )

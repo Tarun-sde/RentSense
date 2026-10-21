@@ -6,7 +6,7 @@ from sqlalchemy import desc
 
 from app.models import Equipment, Rental, Telemetry, Recommendation, Site
 from app.analytics.anomaly_engine import AnomalyResult, evaluate_equipment_anomalies
-from app.services.equipment_service import get_current_rental
+from app.services.equipment_service import get_current_rental, get_latest_telemetry, fleet_query, load_fleet
 
 
 @dataclass
@@ -215,16 +215,11 @@ def generate_fleet_recommendations(db: Session, now: Optional[datetime] = None) 
     Generate deterministic recommendations across all fleet equipment in the database.
     """
     current_time = now or datetime.now(timezone.utc)
-    equipment_list = db.query(Equipment).all()
+    equipment_list = load_fleet(fleet_query(db))
     fleet_recommendations: List[RecommendationResult] = []
 
     for eq in equipment_list:
-        latest_tel = (
-            db.query(Telemetry)
-            .filter(Telemetry.equipment_id == eq.id)
-            .order_by(desc(Telemetry.timestamp))
-            .first()
-        )
+        latest_tel = get_latest_telemetry(eq)
         current_rent = get_current_rental(eq)
         recs = evaluate_equipment_recommendations(
             equipment=eq,
@@ -245,17 +240,14 @@ def sync_recommendations_to_db(db: Session, recommendations: List[Recommendation
     """
     current_time = now or datetime.now(timezone.utc)
     synced = []
+    if not recommendations:
+        return synced
+    existing_by_key = {(r.equipment_id, r.recommendation_type): r for r in db.query(Recommendation)
+        .filter(Recommendation.equipment_id.in_({r.equipment_id for r in recommendations}),
+                Recommendation.status == "PENDING").order_by(Recommendation.id.desc()).all()}
 
     for r in recommendations:
-        existing = (
-            db.query(Recommendation)
-            .filter(
-                Recommendation.equipment_id == r.equipment_id,
-                Recommendation.recommendation_type == r.recommendation_type,
-                Recommendation.status == "PENDING",
-            )
-            .first()
-        )
+        existing = existing_by_key.get((r.equipment_id, r.recommendation_type))
         if existing:
             existing.priority = r.priority
             existing.explanation = r.explanation
@@ -276,9 +268,11 @@ def sync_recommendations_to_db(db: Session, recommendations: List[Recommendation
                 created_at=current_time,
             )
             db.add(new_rec)
+            existing_by_key[(r.equipment_id, r.recommendation_type)] = new_rec
             synced.append(new_rec)
 
+    db.flush()
+    ids = [s.id for s in synced]
     db.commit()
-    for s in synced:
-        db.refresh(s)
-    return synced
+    refreshed = {r.id: r for r in db.query(Recommendation).filter(Recommendation.id.in_(ids)).all()}
+    return [refreshed[id] for id in ids]

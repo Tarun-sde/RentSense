@@ -134,6 +134,11 @@ cd backend
 ```
 
 ### Seed Initial Data
+
+Seeding now only initializes an empty database and uses dates relative to today. Existing data is preserved. Docker startup does not seed unless you explicitly set `SEED_DEMO_DATA=true` for a fresh demo database; set it back to `false` afterward. Never use the seeder’s `--reset` option against Neon or data you want to keep. Configure `ADMIN_PASSWORD` rather than relying on a default login.
+
+Production HTTPS cookies default to Secure; local HTTP Compose defaults `AUTH_COOKIE_SECURE=false`. Keep it `true` on Azure. See [performance results, verification and deployment instructions](docs/PERFORMANCE_OPTIMIZATION_REPORT.md).
+
 Populates 7 representative heavy assets, 3 jobsites, 4 certified operators, active rentals, historical telemetry, and baseline forecasts:
 ```bash
 .\venv\Scripts\python.exe app/seed/seed.py

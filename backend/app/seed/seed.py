@@ -42,7 +42,7 @@ def reset_database(db: Session):
     db.commit()
 
 
-def seed_database(db: Session, reset: bool = True, anchor_time: datetime = ANCHOR_TIME):
+def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None = None):
     """
     Deterministic & Idempotent Database Seeder localized for Indian infrastructure operations.
     Seeds the 7 challenge equipment assets, 3 sites, 4 operators, active & historical rentals,
@@ -51,8 +51,12 @@ def seed_database(db: Session, reset: bool = True, anchor_time: datetime = ANCHO
     Base.metadata.create_all(bind=db.get_bind())
     if reset:
         reset_database(db)
+    elif any(db.query(model).first() is not None for model in
+             (Equipment, Rental, Telemetry, Site, Operator, Alert, Recommendation, Action, ImpactRecord, Forecast, AuditEvent)):
+        # Existing data is never moved or partially reseeded on a restart.
+        return
 
-    base_time = anchor_time
+    base_time = anchor_time or datetime.now(timezone.utc).replace(microsecond=0)
 
     # 1. Seed Sites (3 realistic Indian construction/mining operations)
     sites_data = [
@@ -469,7 +473,7 @@ def seed_database(db: Session, reset: bool = True, anchor_time: datetime = ANCHO
             "equipment_id": "EQX1006",
             "alert_type": "OVERDUE",
             "severity": "CRITICAL",
-            "message": "Rental contract for EQX1006 is 48.0h overdue (scheduled return was 2026-08-30 12:00 UTC). Rate surcharge is active at ₹7,500.00/day.",
+            "message": f"Rental contract for EQX1006 is 48.0h overdue (scheduled return was {(base_time - timedelta(days=2)):%Y-%m-%d %H:%M UTC}). Rate surcharge is active at ₹7,500.00/day.",
             "status": "OPEN",
             "metadata_json": {"overdue_hours": 48.0, "daily_rate": 7500.0, "anomaly_score": 84, "recommended_action": "INITIATE_RETURN"},
             "created_at": base_time - timedelta(days=2),
@@ -1011,23 +1015,16 @@ def seed_database(db: Session, reset: bool = True, anchor_time: datetime = ANCHO
         if not existing:
             db.add(AuditEvent(**ae_data))
 
-    # 12. Seed Admin & CI Test Users (Deterministic IDs so tokens survive table reset)
+    # 12. Seed only an explicitly configured administrator; tests create their own user.
     admin_users = [
         {
             "id": "00000000-0000-0000-0000-000000000001",
             "email": os.getenv("ADMIN_EMAIL", "admin@rentsense.local"),
-            "hashed_password": hash_password(os.getenv("ADMIN_PASSWORD", "RentSense2026!")),
+            "hashed_password": hash_password(os.environ["ADMIN_PASSWORD"]),
             "role": "admin",
             "is_active": True,
         },
-        {
-            "id": "00000000-0000-0000-0000-000000000002",
-            "email": "ci-test@rentsense.test",
-            "hashed_password": hash_password("CiTest789!"),
-            "role": "admin",
-            "is_active": True,
-        },
-    ]
+    ] if os.getenv("ADMIN_PASSWORD") else []
     for u_data in admin_users:
         if not db.query(User).filter(User.email == u_data["email"]).first():
             db.add(User(**u_data))
@@ -1037,8 +1034,12 @@ def seed_database(db: Session, reset: bool = True, anchor_time: datetime = ANCHO
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Initialize an empty demo database; existing data is preserved by default.")
+    parser.add_argument("--reset", action="store_true", help="Explicitly erase domain data in a DISPOSABLE demo database")
+    args = parser.parse_args()
     db = SessionLocal()
     try:
-        seed_database(db, reset=True)
+        seed_database(db, reset=args.reset)
     finally:
         db.close()

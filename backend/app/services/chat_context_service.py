@@ -5,11 +5,13 @@ to minimize DB overhead and reduce LLM token processing latency.
 """
 import re
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Set
-from sqlalchemy.orm import Session, joinedload
+from typing import Dict, Any
+from sqlalchemy.orm import Session
 
-from app.models import Equipment, Alert, Recommendation, Rental, Telemetry, ImpactRecord, Site, Operator
-from app.services.status_service import derive_status, calculate_utilization, EquipmentStatus
+from app.models import Equipment, Alert, Recommendation
+from app.services.status_service import derive_status, calculate_utilization
+
+from app.services.equipment_service import fleet_query, load_fleet, get_current_rental, get_latest_telemetry
 
 # Regex to detect asset IDs mentioned in query (e.g. EQX1001, EQX-TEST-01)
 ASSET_ID_PATTERN = re.compile(r"\b(EQX[0-9A-Z_-]+)\b", re.IGNORECASE)
@@ -75,29 +77,15 @@ Refer to SECTION 2 (GENERAL APP KNOWLEDGE BASE) for authoritative platform behav
     # -------------------------------------------------------------------------
     if intent == "ASSET":
         target_id = target_assets[0]
-        # Query target asset with eager loaded rentals, alerts, telemetry
-        eq = (
-            db.query(Equipment)
-            .options(
-                joinedload(Equipment.rentals).joinedload(Rental.site),
-                joinedload(Equipment.rentals).joinedload(Rental.operator),
-            )
-            .filter(Equipment.id.ilike(target_id))
-            .first()
-        )
+        eq = next(iter(load_fleet(fleet_query(db).filter(Equipment.id == target_id))), None)
 
         if not eq:
             return f"""[TARGETED ASSET LOOKUP AS OF {now_str}]:
-Asset ID '{target_id}' was not found in the RentSense fleet database. Known equipment IDs: EQX1001 through EQX1007."""
+Asset ID '{target_id}' was not found in the RentSense fleet database."""
 
         # Fetch latest telemetry and active rental
-        latest_telem = (
-            db.query(Telemetry)
-            .filter(Telemetry.equipment_id == eq.id)
-            .order_by(Telemetry.timestamp.desc())
-            .first()
-        )
-        active_rental = next((r for r in eq.rentals if r.checked_in_at is None), None)
+        latest_telem = get_latest_telemetry(eq)
+        active_rental = get_current_rental(eq)
         status = derive_status(active_rental, latest_telem, now=now).value
 
         # Open alerts for this asset
@@ -145,25 +133,7 @@ Asset ID '{target_id}' was not found in the RentSense fleet database. Known equi
     # -------------------------------------------------------------------------
     # INTENT: Full Fleet Overview (KPIs, Active Roster, Open Alerts)
     # -------------------------------------------------------------------------
-    # Batch query all equipment with active rentals and sites
-    equipment_list = (
-        db.query(Equipment)
-        .options(
-            joinedload(Equipment.rentals).joinedload(Rental.site),
-            joinedload(Equipment.rentals).joinedload(Rental.operator),
-        )
-        .order_by(Equipment.id.asc())
-        .all()
-    )
-
-    # Batch query all latest telemetry in 1 fast query
-    all_telemetry = (
-        db.query(Telemetry)
-        .order_by(Telemetry.equipment_id, Telemetry.timestamp.desc())
-        .distinct(Telemetry.equipment_id)
-        .all()
-    )
-    telem_by_eq = {t.equipment_id: t for t in all_telemetry}
+    equipment_list = load_fleet(fleet_query(db))
 
     # Batch query open alerts
     open_alerts = (
@@ -180,8 +150,8 @@ Asset ID '{target_id}' was not found in the RentSense fleet database. Known equi
     roster_lines = []
 
     for eq in equipment_list:
-        active_rental = next((r for r in eq.rentals if r.checked_in_at is None), None)
-        telem = telem_by_eq.get(eq.id)
+        active_rental = get_current_rental(eq)
+        telem = get_latest_telemetry(eq)
         status_val = derive_status(active_rental, telem, now=now).value
         status_counts[status_val] = status_counts.get(status_val, 0) + 1
 
@@ -196,8 +166,6 @@ Asset ID '{target_id}' was not found in the RentSense fleet database. Known equi
             f"- {eq.id} ({eq.type}): Status={status_val}, Site={site_name}, Engine={eng_h}, Idle={idle_h}{alert_tag}"
         )
 
-    # Quick Realized Impact Query
-    realized_savings = db.query(ImpactRecord).count() * 450.0  # approximate fast aggregation or query
 
     return f"""[LIVE FLEET SNAPSHOT AS OF {now_str}]:
 1. FLEET STATUS COUNTS: Total={len(equipment_list)}, Active={status_counts['ACTIVE']}, Idle={status_counts['IDLE']}, DueSoon={status_counts['DUE_SOON']}, Overdue={status_counts['OVERDUE']}, Unassigned={status_counts['UNASSIGNED']}

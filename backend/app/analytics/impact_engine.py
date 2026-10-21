@@ -154,43 +154,45 @@ def record_realized_action_savings(
     return impact_rec
 
 
-def get_fleet_impact_summary(db: Session) -> Dict[str, Any]:
+def get_fleet_impact_summary(db: Session, site_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Aggregate total realized savings, estimated impact, and breakdowns by action type, site, and equipment type.
     """
     # 1. Realized records from completed actions
-    realized_records = db.query(ImpactRecord).all()
-
-    total_realized = sum(r.realized_amount for r in realized_records)
-    total_estimated = sum(r.estimated_amount for r in realized_records)
+    records = db.query(ImpactRecord)
+    if site_id:
+        records = records.filter(ImpactRecord.site_id == site_id)
+    total_realized, total_estimated = records.with_entities(
+        func.coalesce(func.sum(ImpactRecord.realized_amount), 0),
+        func.coalesce(func.sum(ImpactRecord.estimated_amount), 0)).one()
 
     # Add estimated impact from open recommendations
     from app.models import Recommendation
-    open_recs = db.query(Recommendation).filter(Recommendation.status == "PENDING").all()
-    for rec in open_recs:
-        if rec.estimated_impact and "estimated_savings_usd" in rec.estimated_impact:
-            total_estimated += float(rec.estimated_impact["estimated_savings_usd"])
+    open_recs = db.query(func.coalesce(func.sum(
+        Recommendation.estimated_impact["estimated_savings_usd"].as_float()), 0)).filter(Recommendation.status == "PENDING")
+    if site_id:
+        open_recs = open_recs.filter(Recommendation.equipment_id.in_(
+            db.query(Rental.equipment_id).filter(Rental.site_id == site_id, Rental.checked_in_at.is_(None))))
+    total_estimated += open_recs.scalar()
 
     # Breakdown by action type
-    by_action: Dict[str, float] = {}
-    for r in realized_records:
-        by_action[r.impact_type] = round(by_action.get(r.impact_type, 0.0) + r.realized_amount, 2)
+    by_action = {label: round(amount, 2) for label, amount in records.with_entities(
+        ImpactRecord.impact_type, func.sum(ImpactRecord.realized_amount)).group_by(ImpactRecord.impact_type).all()}
 
     # Breakdown by site
-    by_site: Dict[str, float] = {}
-    sites = {s.id: s.name for s in db.query(Site).all()}
-    for r in realized_records:
-        site_label = sites.get(r.site_id, "Central Logistics") if r.site_id else "Central Logistics"
-        by_site[site_label] = round(by_site.get(site_label, 0.0) + r.realized_amount, 2)
+    site_label = func.coalesce(Site.name, "Central Logistics")
+    by_site = {label: round(amount, 2) for label, amount in records.outerjoin(Site).with_entities(
+        site_label, func.sum(ImpactRecord.realized_amount)).group_by(site_label).all()}
 
     # Breakdown by equipment type
-    by_eq_type: Dict[str, float] = {}
-    eqs = {e.id: e.type for e in db.query(Equipment).all()}
-    for r in realized_records:
-        eq_type = eqs.get(r.equipment_id, "Heavy Machinery")
-        by_eq_type[eq_type] = round(by_eq_type.get(eq_type, 0.0) + r.realized_amount, 2)
+    eq_type = func.coalesce(Equipment.type, "Heavy Machinery")
+    by_eq_type = {label: round(amount, 2) for label, amount in records.outerjoin(Equipment).with_entities(
+        eq_type, func.sum(ImpactRecord.realized_amount)).group_by(eq_type).all()}
 
-    completed_actions_count = db.query(Action).filter(Action.status == "COMPLETED").count()
+    completed = db.query(Action).filter(Action.status == "COMPLETED")
+    if site_id:
+        completed = completed.filter(Action.id.in_(records.with_entities(ImpactRecord.action_id)))
+    completed_actions_count = completed.count()
 
     return {
         "total_estimated_impact": round(total_estimated, 2),
@@ -199,5 +201,5 @@ def get_fleet_impact_summary(db: Session) -> Dict[str, Any]:
         "savings_by_action_type": by_action,
         "savings_by_site": by_site,
         "savings_by_equipment_type": by_eq_type,
-        "recent_impact_records": realized_records,
+        "recent_impact_records": records.order_by(ImpactRecord.calculated_at.desc(), ImpactRecord.id.desc()).limit(100).all(),
     }

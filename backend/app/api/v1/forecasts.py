@@ -9,7 +9,6 @@ from app.models import Forecast, Site
 from app.schemas.forecast import ForecastResponse, ForecastFleetSummary
 from app.analytics.forecasting import (
     generate_demand_forecasts,
-    sync_forecasts_to_db,
 )
 
 router = APIRouter(prefix="", tags=["Forecasts"])
@@ -34,9 +33,6 @@ def get_demand_forecasts(
         horizon_weeks=horizon_weeks,
         now=now,
     )
-
-    # Optionally sync to database
-    sync_forecasts_to_db(db, forecast_records)
 
     # Return response records
     responses = []

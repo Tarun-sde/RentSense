@@ -1,3 +1,4 @@
+import { invalidateOperationalData, getQueryClient, apiQuery } from "./query-client";
 import {
   DashboardKPIs,
   EquipmentListItem,
@@ -13,13 +14,7 @@ import {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function fetchDashboardKPIs(): Promise<DashboardKPIs> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/dashboard`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch dashboard KPIs: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<DashboardKPIs>(`/dashboard`));
 }
 
 export async function fetchEquipmentList(params?: {
@@ -34,47 +29,20 @@ export async function fetchEquipmentList(params?: {
   if (params?.site_id) query.append("site_id", params.site_id);
   if (params?.type) query.append("type", params.type);
 
-  const url = `${API_BASE_URL}/api/v1/equipment${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch equipment list: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/equipment${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<EquipmentListItem[]>(url));
 }
 
 export async function fetchEquipmentDetail(id: string): Promise<EquipmentDetail> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/equipment/${encodeURIComponent(id)}`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    if (res.status === 404) {
-      throw new Error("NOT_FOUND");
-    }
-    throw new Error(`Failed to fetch equipment detail: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<EquipmentDetail>(`/equipment/${encodeURIComponent(id)}`));
 }
 
 export async function fetchSites(): Promise<Site[]> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/sites`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch sites: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<Site[]>(`/sites`));
 }
 
 export async function fetchOperators(): Promise<Operator[]> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/operators`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch operators: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<Operator[]>(`/operators`));
 }
 
 export async function checkoutEquipment(payload: CheckoutPayload): Promise<CheckoutResponse> {
@@ -88,6 +56,7 @@ export async function checkoutEquipment(payload: CheckoutPayload): Promise<Check
     const errorBody = await res.json().catch(() => ({}));
     throw new Error(errorBody.detail || `Checkout failed: ${res.status} ${res.statusText}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -102,6 +71,7 @@ export async function checkinEquipment(payload: CheckinPayload): Promise<Checkin
     const errorBody = await res.json().catch(() => ({}));
     throw new Error(errorBody.detail || `Check-in failed: ${res.status} ${res.statusText}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -117,14 +87,8 @@ export async function fetchAlerts(params?: {
   if (params?.equipment_id) query.append("equipment_id", params.equipment_id);
   if (params?.type) query.append("type", params.type);
 
-  const url = `${API_BASE_URL}/api/v1/alerts${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch alerts: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/alerts${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Alert[]>(url));
 }
 
 export async function fetchAnomalies(params?: {
@@ -137,24 +101,12 @@ export async function fetchAnomalies(params?: {
   if (params?.severity) query.append("severity", params.severity);
   if (params?.type) query.append("type", params.type);
 
-  const url = `${API_BASE_URL}/api/v1/anomalies${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch anomalies: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/anomalies${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Anomaly[]>(url));
 }
 
 export async function fetchEquipmentAnomalies(id: string): Promise<import("@/types").Anomaly[]> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/equipment/${encodeURIComponent(id)}/anomalies`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch equipment anomalies: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Anomaly[]>(`/equipment/${encodeURIComponent(id)}/anomalies`));
 }
 
 export async function fetchForecasts(params?: {
@@ -167,14 +119,8 @@ export async function fetchForecasts(params?: {
   if (params?.equipment_type) query.append("equipment_type", params.equipment_type);
   if (params?.horizon_weeks) query.append("horizon_weeks", params.horizon_weeks.toString());
 
-  const url = `${API_BASE_URL}/api/v1/forecasts${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch forecasts: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/forecasts${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Forecast[]>(url));
 }
 
 export async function fetchForecastSummary(params?: {
@@ -185,19 +131,9 @@ export async function fetchForecastSummary(params?: {
   if (params?.site_id) query.append("site_id", params.site_id);
   if (params?.horizon_weeks) query.append("horizon_weeks", params.horizon_weeks.toString());
 
-  const url = `${API_BASE_URL}/api/v1/forecasts/summary${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch forecast summary: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/forecasts/summary${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").ForecastSummary>(url));
 }
-
-// ==========================================
-// Recommendations, Actions & Impact
-// ==========================================
 
 export async function fetchRecommendations(params?: {
   equipment_id?: string;
@@ -211,22 +147,12 @@ export async function fetchRecommendations(params?: {
   if (params?.status) query.append("status", params.status);
   if (params?.recommendation_type) query.append("recommendation_type", params.recommendation_type);
 
-  const url = `${API_BASE_URL}/api/v1/recommendations${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch recommendations: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/recommendations${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Recommendation[]>(url));
 }
 
 export async function fetchEquipmentRecommendations(id: string): Promise<import("@/types").Recommendation[]> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/recommendations/equipment/${encodeURIComponent(id)}`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch equipment recommendations: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Recommendation[]>(`/recommendations/equipment/${encodeURIComponent(id)}`));
 }
 
 export async function triggerActionFromRecommendation(
@@ -248,6 +174,7 @@ export async function triggerActionFromRecommendation(
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || `Failed to trigger action: ${res.status}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -263,20 +190,12 @@ export async function fetchActions(params?: {
   if (params?.action_type) query.append("action_type", params.action_type);
   if (params?.priority) query.append("priority", params.priority);
 
-  const url = `${API_BASE_URL}/api/v1/actions${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch actions: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/actions${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Action[]>(url));
 }
 
 export async function fetchActionDetail(id: number): Promise<import("@/types").Action> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/actions/${id}`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch action detail: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").Action>(`/actions/${id}`));
 }
 
 export async function createAction(data: {
@@ -299,6 +218,7 @@ export async function createAction(data: {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to create action: ${res.status}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -320,6 +240,7 @@ export async function completeAction(
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to complete action: ${res.status}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -340,6 +261,7 @@ export async function cancelAction(
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to cancel action: ${res.status}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -360,6 +282,7 @@ export async function resolveAlert(
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to resolve alert: ${res.status}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -367,21 +290,14 @@ export async function fetchImpactSummary(params?: { site_id?: string }): Promise
   const query = new URLSearchParams();
   if (params?.site_id) query.append("site_id", params.site_id);
 
-  const url = `${API_BASE_URL}/api/v1/impact${query.toString() ? `?${query.toString()}` : ""}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch impact summary: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  const url = `/impact${query.toString() ? `?${query.toString()}` : ""}`;
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").ImpactSummary>(url));
 }
 
 export async function fetchActionImpactDetail(actionId: number): Promise<import("@/types").ImpactDetail> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/actions/${actionId}/impact`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch action impact detail: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<import("@/types").ImpactDetail>(`/actions/${actionId}/impact`));
 }
+
 export async function createEquipment(payload: {
   id: string;
   type: string;
@@ -400,6 +316,7 @@ export async function createEquipment(payload: {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || err.message || `Failed to create equipment: ${res.status}`);
   }
+  await invalidateOperationalData();
   return res.json();
 }
 
@@ -503,9 +420,5 @@ export async function streamChatMessage(
 }
 
 export async function fetchChatStatus(): Promise<{ is_configured: boolean; model: string }> {
-  const res = await fetch(`${API_BASE_URL}/api/v1/chat/status`, { cache: "no-store" });
-  if (!res.ok) {
-    return { is_configured: false, model: "gemini-3.6-flash" };
-  }
-  return res.json();
+  return getQueryClient().fetchQuery(apiQuery<{ is_configured: boolean; model: string }>(`/chat/status`));
 }

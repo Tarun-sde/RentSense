@@ -25,7 +25,7 @@ def get_fleet_impact(
     """
     Get fleet-wide financial impact, total realized savings, and breakdowns by action type and jobsite.
     """
-    summary = get_fleet_impact_summary(db)
+    summary = get_fleet_impact_summary(db, site_id=site_id)
     return summary
 
 

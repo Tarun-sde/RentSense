@@ -13,8 +13,8 @@ interface TopBarProps {
 
 export function TopBar({
   onMenuToggle,
-  openAlertsCount = 4,
-  connectionState = "LIVE",
+  openAlertsCount = 0,
+  connectionState = "OFFLINE",
 }: TopBarProps) {
   const getConnectionBadge = () => {
     switch (connectionState) {
@@ -25,11 +25,16 @@ export function TopBar({
           sub: "SSE Stream Active",
           border: "border-emerald-500/20 bg-emerald-50/60 text-emerald-800",
         };
+      case "STALE":
+        return {
+          dot: "bg-amber-500", text: "TELEMETRY STALE", sub: "Awaiting fresh sensor data",
+          border: "border-amber-500/20 bg-amber-50/60 text-amber-800",
+        };
       case "POLLING":
         return {
           dot: "bg-blue-500 animate-pulse",
           text: "STREAM POLLING",
-          sub: "Fallback 6s Cycle",
+          sub: "Fallback 30s Cycle",
           border: "border-blue-500/20 bg-blue-50/60 text-blue-800",
         };
       case "RECONNECTING":

@@ -29,6 +29,7 @@ def list_actions(
     action_type: Optional[str] = Query(None, description="Filter by action type (RETURN, REASSIGN, EXTEND, INVESTIGATE)"),
     priority: Optional[str] = Query(None, description="Filter by priority (CRITICAL, HIGH, MEDIUM, LOW)"),
     limit: int = Query(100, ge=1, le=500, description="Max actions to retrieve"),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """
@@ -44,7 +45,7 @@ def list_actions(
     if priority:
         query = query.filter(Action.priority == priority.upper())
 
-    return query.order_by(Action.created_at.desc()).limit(limit).all()
+    return query.order_by(Action.created_at.desc(), Action.id.desc()).offset(offset).limit(limit).all()
 
 
 

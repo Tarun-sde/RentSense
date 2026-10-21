@@ -1,3 +1,4 @@
+import { getQueryClient } from "./query-client";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 export interface UserSession {
@@ -21,6 +22,7 @@ export async function login(
     const err = await res.json().catch(() => ({}));
     throw new Error(err.message || err.detail || "Invalid credentials");
   }
+  getQueryClient().clear();
   return res.json();
 }
 
@@ -29,6 +31,7 @@ export async function logout(): Promise<void> {
     method: "POST",
     credentials: "include",
   });
+  getQueryClient().clear();
 }
 
 export async function getMe(): Promise<UserSession | null> {

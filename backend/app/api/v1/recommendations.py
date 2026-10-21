@@ -12,7 +12,7 @@ from app.analytics.recommendation_engine import (
     sync_recommendations_to_db,
 )
 from app.services.action_service import create_action
-from app.services.equipment_service import get_current_rental
+from app.services.equipment_service import fleet_query, load_fleet
 from app.core.security import get_current_user
 
 router = APIRouter(prefix="/recommendations", tags=["Recommendations"])
@@ -25,6 +25,7 @@ def get_recommendations(
     status: Optional[str] = Query(None, description="Filter by status (PENDING, IN_PROGRESS, COMPLETED)"),
     recommendation_type: Optional[str] = Query(None, description="Filter by type (RETURN, REASSIGN, EXTEND, INVESTIGATE)"),
     limit: int = Query(50, ge=1, le=200, description="Max recommendations to retrieve"),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """
@@ -44,7 +45,7 @@ def get_recommendations(
     if recommendation_type:
         query = query.filter(Recommendation.recommendation_type == recommendation_type.upper())
 
-    return query.order_by(Recommendation.created_at.desc()).limit(limit).all()
+    return query.order_by(Recommendation.created_at.desc(), Recommendation.id.desc()).offset(offset).limit(limit).all()
 
 
 
@@ -56,7 +57,7 @@ def get_equipment_recommendations(
     """
     Get active recommendations for a specific equipment asset.
     """
-    equipment = db.query(Equipment).filter(Equipment.id == equipment_id).first()
+    equipment = next(iter(load_fleet(fleet_query(db).filter(Equipment.id == equipment_id))), None)
     if not equipment:
         raise HTTPException(status_code=404, detail=f"Equipment {equipment_id} not found")
 

@@ -1,6 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
+import dynamic from "next/dynamic";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { QueryError } from "@/components/ui/QueryError";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -20,91 +23,37 @@ import {
 import { AppShell } from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { TelemetryChart } from "@/components/assets/TelemetryChart";
-import { MiniMap } from "@/components/assets/MiniMap";
+const TelemetryChart = dynamic(() => import("@/components/assets/TelemetryChart").then(m => m.TelemetryChart), { loading: () => <div className="h-80 animate-pulse rounded-xl bg-black/5" /> });
+const MiniMap = dynamic(() => import("@/components/assets/MiniMap").then(m => m.MiniMap), { ssr: false, loading: () => <div className="h-64 animate-pulse rounded-xl bg-black/5" /> });
 import { CardSkeleton } from "@/components/ui/SkeletonLoader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { CheckoutModal } from "@/components/handoff/CheckoutModal";
 import { CheckinModal } from "@/components/handoff/CheckinModal";
-import { fetchEquipmentDetail, fetchEquipmentAnomalies, fetchEquipmentRecommendations, triggerActionFromRecommendation } from "@/lib/api";
+import { triggerActionFromRecommendation } from "@/lib/api";
 import { useTelemetryStream } from "@/lib/useTelemetryStream";
-import { EquipmentDetail, TelemetryStreamEvent, Telemetry, Anomaly, Recommendation } from "@/types";
-import { cn, getErrorMessage, formatCurrency } from "@/lib/utils";
+import { EquipmentDetail, Anomaly, Recommendation } from "@/types";
+import { cn, formatCurrency } from "@/lib/utils";
 
 export default function AssetDetailPage() {
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
-  const [equipment, setEquipment] = useState<EquipmentDetail | null>(null);
-  const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
-  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const detailQuery = useApiQuery<EquipmentDetail>(`/equipment/${encodeURIComponent(id)}`, Boolean(id));
+  const anomaliesQuery = useApiQuery<Anomaly[]>(`/equipment/${encodeURIComponent(id)}/anomalies`, Boolean(id));
+  const recommendationsQuery = useApiQuery<Recommendation[]>(`/recommendations/equipment/${encodeURIComponent(id)}`, Boolean(id));
+  const equipment = detailQuery.data;
+  const anomalies = anomaliesQuery.data ?? [];
+  const recommendations = recommendationsQuery.data ?? [];
+  const loading = detailQuery.isPending;
   const [isTriggeringAction, setIsTriggeringAction] = useState(false);
 
   // Workflow Modal States
   const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
   const [checkinModalOpen, setCheckinModalOpen] = useState(false);
 
-  const loadDetail = useCallback(async () => {
-    if (!id) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const [data, anomData, recData] = await Promise.all([
-        fetchEquipmentDetail(id),
-        fetchEquipmentAnomalies(id).catch(() => []),
-        fetchEquipmentRecommendations(id).catch(() => []),
-      ]);
-      setEquipment(data);
-      setAnomalies(anomData);
-      setRecommendations(recData);
-    } catch (err: unknown) {
-      console.error("Error loading asset detail:", err);
-      setError(getErrorMessage(err, "Failed to load asset") === "NOT_FOUND" ? "Equipment Not Found" : "Failed to load asset");
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
-
-  useEffect(() => {
-    queueMicrotask(() => void loadDetail());
-  }, [loadDetail]);
-
-  // Handle incoming real-time telemetry events for this specific asset
-  const handleLiveTelemetry = useCallback((event: TelemetryStreamEvent) => {
-    if (event.equipment_id !== id) return;
-
-    setEquipment((prev) => {
-      if (!prev) return prev;
-      const updatedTelemetry: Telemetry = {
-        equipment_id: event.equipment_id,
-        timestamp: typeof event.timestamp === "string" ? event.timestamp : new Date(event.timestamp).toISOString(),
-        latitude: event.latitude,
-        longitude: event.longitude,
-        engine_hours: event.engine_hours,
-        idle_hours: event.idle_hours,
-        fuel_pct: event.fuel_pct,
-      };
-
-      const updatedHistory = [updatedTelemetry, ...(prev.recent_telemetry || [])].slice(0, 50);
-
-      return {
-        ...prev,
-        status: event.status,
-        utilization_rate: event.utilization_rate,
-        latest_telemetry: updatedTelemetry,
-        recent_telemetry: updatedHistory,
-      };
-    });
-  }, [id]);
-
-  const { connectionState } = useTelemetryStream({
-    onTelemetry: handleLiveTelemetry,
-    onFullRefresh: () => loadDetail(),
-    enabled: !loading && !error && Boolean(equipment),
-  });
+  const loadDetail = () => Promise.all([detailQuery.refetch(), anomaliesQuery.refetch(), recommendationsQuery.refetch()]);
+  const { connectionState } = useTelemetryStream();
 
   if (loading) {
     return (
@@ -122,9 +71,10 @@ export default function AssetDetailPage() {
     );
   }
 
-  if (error || !equipment) {
+  if (!equipment) {
     return (
       <AppShell>
+        <QueryError error={detailQuery.error} retry={loadDetail} />
         <EmptyState
           title="Equipment Asset Not Found"
           description={`No record found for asset identifier "${id}". Please check the fleet registry.`}
@@ -150,6 +100,7 @@ export default function AssetDetailPage() {
 
   return (
     <AppShell connectionState={connectionState}>
+      <QueryError error={detailQuery.error || anomaliesQuery.error || recommendationsQuery.error} retry={loadDetail} />
       {/* Breadcrumb & Navigation */}
       <div className="mb-6 flex items-center justify-between">
         <Link
@@ -621,7 +572,6 @@ export default function AssetDetailPage() {
         dailyRate={equipment.daily_rate}
         dealer={equipment.dealer}
         onSuccess={() => {
-          loadDetail();
         }}
       />
 
@@ -635,7 +585,6 @@ export default function AssetDetailPage() {
         currentOperatorName={equipment.operator?.name}
         currentStatus={equipment.status}
         onSuccess={() => {
-          loadDetail();
         }}
       />
     </AppShell>

@@ -17,6 +17,7 @@ def get_alerts(
     equipment_id: Optional[str] = Query(None, description="Filter by equipment ID"),
     type: Optional[str] = Query(None, description="Filter by alert type"),
     limit: int = Query(100, ge=1, le=500, description="Max alerts to retrieve"),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     """
@@ -33,7 +34,7 @@ def get_alerts(
     if type:
         query = query.filter(Alert.alert_type == type.upper())
 
-    alerts = query.order_by(desc(Alert.created_at)).limit(limit).all()
+    alerts = query.order_by(desc(Alert.created_at), Alert.id.desc()).offset(offset).limit(limit).all()
     return [AlertResponse.model_validate(a) for a in alerts]
 
 

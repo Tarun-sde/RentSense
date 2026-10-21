@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#181818"/>
+      <stop offset="100%" stop-color="#0d0d0d"/>
+    </linearGradient>
+    <linearGradient id="beaconGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b3d"/>
+      <stop offset="100%" stop-color="#ff5a24"/>
+    </linearGradient>
+    <radialGradient id="innerGlow" cx="50%" cy="0%" r="85%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.07)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="0" stdDeviation="6" flood-color="#ff5a24" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Deep Obsidian Squircle Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <rect width="512" height="512" rx="112" fill="url(#innerGlow)"/>
+  
+  <!-- Subtle Architectural Bevel / Border -->
+  <rect x="6" y="6" width="500" height="500" rx="106" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2"/>
+  <rect x="1" y="1" width="510" height="510" rx="111" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="1.5"/>
+
+  <!-- Top Inset Edge Highlight -->
+  <line x1="112" y1="8" x2="400" y2="8" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" stroke-linecap="round"/>
+
+  <!-- Playfair Display Lettermark R -->
+  <path d="M99.05 104.86L99.05 96.00Q108.35 96.44 123.42 96.89Q138.49 97.33 153.12 97.33L153.12 97.33Q173.95 97.33 193.01 96.89Q212.07 96.44 220.04 96.44L220.04 96.44Q255.94 96.44 279.66 106.64Q303.37 116.83 315.11 134.34Q326.86 151.84 326.86 173.56L326.86 173.56Q326.86 186.86 321.54 201.93Q316.22 217.00 303.15 230.29Q290.07 243.59 267.47 252.23Q244.86 260.88 210.29 260.88L210.29 260.88L167.75 260.88L167.75 252.01L205.86 252.01Q237.33 252.01 253.95 242.04Q270.57 232.07 276.55 215.45Q282.54 198.83 282.54 178.44L282.54 178.44Q282.54 143.42 265.92 124.14Q249.30 104.86 208.96 104.86L208.96 104.86Q188.58 104.86 182.37 112.40Q176.17 119.93 176.17 142.98L176.17 142.98L176.17 362.81Q176.17 378.77 178.83 386.75Q181.48 394.73 189.24 397.39Q197.00 400.04 212.07 400.93L212.07 400.93L212.07 409.80Q201.87 408.91 186.58 408.69Q171.29 408.47 155.78 408.47L155.78 408.47Q138.49 408.47 123.42 408.69Q108.35 408.91 99.05 409.80L99.05 409.80L99.05 400.93Q114.12 400.04 121.87 397.39Q129.63 394.73 132.29 386.75Q134.95 378.77 134.95 362.81L134.95 362.81L134.95 142.98Q134.95 126.58 132.29 118.83Q129.63 111.07 121.87 108.19Q114.12 105.31 99.05 104.86L99.05 104.86ZM170.40 260.88L169.52 253.34Q193.45 254.23 207.19 255.34Q220.93 256.44 229.57 257.33Q238.22 258.22 246.19 259.55L246.19 259.55Q275.89 264.42 288.96 277.50Q302.04 290.57 308.24 318.05L308.24 318.05L319.32 363.26Q323.76 382.76 328.41 391.40Q333.06 400.04 342.81 399.60L342.81 399.60Q350.35 399.16 355.45 394.73Q360.54 390.29 366.30 382.76L366.30 382.76L372.95 387.63Q363.65 401.37 353.67 408.69Q343.70 416.00 325.53 416.00L325.53 416.00Q309.13 416.00 296.72 406.25Q284.31 396.50 278.11 368.13L278.11 368.13L268.35 323.81Q264.37 304.75 259.27 290.79Q254.17 276.83 245.09 268.85Q236.00 260.88 218.27 260.88L218.27 260.88L170.40 260.88Z" fill="#faf8f5" stroke="#faf8f5" stroke-width="7" stroke-linejoin="round"/>
+
+  <!-- Signature RentSense Orange Signal Beacon -->
+  <!-- Outer Aura Ring -->
+  <rect x="356" y="92" width="74" height="74" rx="12" fill="rgba(255,90,36,0.15)"/>
+  <!-- Middle Ring -->
+  <rect x="363" y="99" width="60" height="60" rx="9" fill="rgba(255,90,36,0.22)"/>
+  <!-- Core Beacon Square -->
+  <rect x="369" y="105" width="48" height="48" rx="7" fill="url(#beaconGrad)" filter="url(#glow)"/>
+  <!-- Top Surface Glint -->
+  <rect x="372" y="107" width="42" height="9" rx="3" fill="rgba(255,255,255,0.30)"/>
+</svg>

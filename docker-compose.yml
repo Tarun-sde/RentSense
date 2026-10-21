@@ -41,6 +41,9 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1,http://localhost:3000,http://127.0.0.1:3000}
       AUTH_ENABLED: ${AUTH_ENABLED:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false} # Local HTTP only; Azure defaults to Secure.
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-480}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@rentsense.local}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}

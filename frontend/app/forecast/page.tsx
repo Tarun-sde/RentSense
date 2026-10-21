@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState } from "react";
 import {
   Building2,
   Layers,
@@ -19,40 +19,20 @@ import { AppShell } from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { MetricCard } from "@/components/ui/MetricCard";
 import { TableSkeleton } from "@/components/ui/SkeletonLoader";
-import { fetchForecasts, fetchSites } from "@/lib/api";
+import { useApiQuery } from "@/lib/useApiQuery";
+import { QueryError } from "@/components/ui/QueryError";
 import { Forecast, Site } from "@/types";
-import { cn, getErrorMessage } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 export default function ForecastPage() {
-  const [forecasts, setForecasts] = useState<Forecast[]>([]);
-  const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string>("ALL");
   const [selectedType, setSelectedType] = useState<string>("ALL");
   const [horizonWeeks, setHorizonWeeks] = useState<number>(4);
-  const [loading, setLoading] = useState(true);
-  const [, setError] = useState<string | null>(null);
-
-  const loadData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [fData, sData] = await Promise.all([
-        fetchForecasts({ horizon_weeks: horizonWeeks }),
-        fetchSites(),
-      ]);
-      setForecasts(fData);
-      setSites(sData);
-    } catch (err: unknown) {
-      console.error("Error loading forecasts:", err);
-      setError(getErrorMessage(err, "Failed to load forecast data"));
-    } finally {
-      setLoading(false);
-    }
-  }, [horizonWeeks]);
-
-  useEffect(() => {
-    queueMicrotask(() => void loadData());
-  }, [loadData]);
+  const forecastQuery = useApiQuery<Forecast[]>(`/forecasts?horizon_weeks=${horizonWeeks}`);
+  const sitesQuery = useApiQuery<Site[]>("/sites");
+  const forecasts = forecastQuery.data ?? [];
+  const sites = sitesQuery.data ?? [];
+  const loading = forecastQuery.isPending;
 
   const filteredForecasts = forecasts.filter((f) => {
     const matchSite = selectedSiteId === "ALL" || f.site_id === selectedSiteId;
@@ -69,7 +49,7 @@ export default function ForecastPage() {
     ? Math.round(
         (filteredForecasts.reduce((acc, f) => acc + f.confidence, 0) / filteredForecasts.length) * 100
       )
-    : 85;
+    : 0;
 
   const validErrors = filteredForecasts
     .map((f) => f.backtest_error)
@@ -77,7 +57,7 @@ export default function ForecastPage() {
   
   const avgMae = validErrors.length > 0
     ? Math.round((validErrors.reduce((acc, e) => acc + e, 0) / validErrors.length) * 100) / 100
-    : 0.35;
+    : 0;
 
   // Aggregate by week for chart visualization
   const weekMap: Record<string, { week: string; total: number; [key: string]: string | number }> = {};
@@ -96,6 +76,8 @@ export default function ForecastPage() {
 
   return (
     <AppShell>
+      <QueryError error={forecastQuery.error} retry={forecastQuery.refetch} />
+      <QueryError error={sitesQuery.error} retry={sitesQuery.refetch} />
       {/* Page Header */}
       <section className="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-black/10">
         <div>
@@ -140,7 +122,7 @@ export default function ForecastPage() {
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-5 mb-10">
         <MetricCard
           title="Projected Demand"
-          value={`${totalDemand} Units`}
+          value={forecastQuery.data ? `${totalDemand} Units` : "—"}
           subtext="Aggregate fleet requirement"
           trend="WMA (0.5/0.3/0.2)"
           trendPositive={true}
@@ -149,7 +131,7 @@ export default function ForecastPage() {
         />
         <MetricCard
           title="Model Confidence"
-          value={`${avgConfidence}%`}
+          value={filteredForecasts.length ? `${avgConfidence}%` : "—"}
           subtext="Deterministic stability score"
           trend="Calibrated"
           trendPositive={true}
@@ -158,7 +140,7 @@ export default function ForecastPage() {
         />
         <MetricCard
           title="Backtest Error (MAE)"
-          value={`±${avgMae} Units`}
+          value={validErrors.length ? `±${avgMae} Units` : "—"}
           subtext="Historical mean absolute error"
           trend="Optimal Accuracy"
           trendPositive={true}
@@ -167,7 +149,7 @@ export default function ForecastPage() {
         />
         <MetricCard
           title="Monitored Sites"
-          value={sites.length || 3}
+          value={sitesQuery.data ? sites.length : "—"}
           subtext="Active bay infrastructure zones"
           trend="Full Surveillance"
           trendPositive={true}

@@ -50,8 +50,9 @@ export function FleetMapCard({ equipmentList }: FleetMapCardProps) {
         cooperativeGestures: false,
       });
 
+      // Track immediately so navigating away before load still releases WebGL resources.
+      mapRef.current = map;
       map.on("load", () => {
-        mapRef.current = map;
         setIsMapReady(true);
       });
 

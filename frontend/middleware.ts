@@ -26,12 +26,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  if (hasToken && pathname === "/login") {
-    // Already authenticated, don't show login again → /
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
-    return NextResponse.redirect(url);
-  }
+  // Cookie presence does not prove validity; allow re-login after JWT expiry.
 
   return NextResponse.next();
 }

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     # JWT Authentication
     JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "change-me-in-production-use-256-bit-random-key")
+    AUTH_COOKIE_SECURE: Optional[bool] = None
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = int(os.getenv("JWT_EXPIRE_MINUTES", "480"))
 

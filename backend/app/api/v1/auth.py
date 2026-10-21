@@ -41,7 +41,7 @@ def login(payload: LoginRequest, response: Response, db: Session = Depends(get_d
         value=token,
         httponly=True,
         samesite="lax",          # lax allows GET redirects to carry cookie
-        secure=False,            # set True when TLS is in front of nginx
+        secure=settings.AUTH_COOKIE_SECURE if settings.AUTH_COOKIE_SECURE is not None else settings.ENVIRONMENT.lower() == "production",
         max_age=settings.JWT_EXPIRE_MINUTES * 60,
         path="/",
     )

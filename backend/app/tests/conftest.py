@@ -6,12 +6,28 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sys, os
+import tempfile
+import atexit
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+# Tests call destructive reset seeders. Always isolate them before importing settings.
+_test_directory = tempfile.TemporaryDirectory(prefix="rentsense-tests-")
+atexit.register(_test_directory.cleanup)
+os.environ.update(DATABASE_URL=f"sqlite:///{_test_directory.name}/tests.db",
+    ENVIRONMENT="development", DEBUG="false", RESEND_API_KEY="", GEMINI_API_KEY="",
+    ADMIN_PASSWORD="isolated-test-password")
 
 from main import app
 from app.db.session import SessionLocal
 from app.models.user import User
 from app.core.security import hash_password, create_access_token
+from app.seed.seed import seed_database
+
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_isolated_database():
+    with SessionLocal() as db:
+        seed_database(db)
 
 _TEST_ID = "00000000-0000-0000-0000-000000000002"
 _TEST_EMAIL = "ci-test@rentsense.test"

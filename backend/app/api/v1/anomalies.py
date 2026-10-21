@@ -11,7 +11,7 @@ from app.analytics.anomaly_engine import (
     evaluate_equipment_anomalies,
     evaluate_fleet_anomalies,
 )
-from app.services.equipment_service import get_current_rental
+from app.services.equipment_service import get_current_rental, get_latest_telemetry, fleet_query, load_fleet
 
 router = APIRouter(prefix="", tags=["Anomalies"])
 
@@ -30,18 +30,13 @@ def get_fleet_anomalies(
     now = datetime.now(timezone.utc)
 
     if equipment_id:
-        equipment = db.query(Equipment).filter(Equipment.id == equipment_id).first()
+        equipment = next(iter(load_fleet(fleet_query(db).filter(Equipment.id == equipment_id))), None)
         if not equipment:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Equipment with ID '{equipment_id}' not found",
             )
-        latest_tel = (
-            db.query(Telemetry)
-            .filter(Telemetry.equipment_id == equipment_id)
-            .order_by(desc(Telemetry.timestamp))
-            .first()
-        )
+        latest_tel = get_latest_telemetry(equipment)
         current_rent = get_current_rental(equipment)
         anomalies = evaluate_equipment_anomalies(
             equipment=equipment,
@@ -81,19 +76,14 @@ def get_equipment_anomalies(
     """
     Retrieve current active anomaly detection analysis for a specific equipment asset.
     """
-    equipment = db.query(Equipment).filter(Equipment.id == id).first()
+    equipment = next(iter(load_fleet(fleet_query(db).filter(Equipment.id == id))), None)
     if not equipment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Equipment with ID '{id}' not found",
         )
 
-    latest_tel = (
-        db.query(Telemetry)
-        .filter(Telemetry.equipment_id == id)
-        .order_by(desc(Telemetry.timestamp))
-        .first()
-    )
+    latest_tel = get_latest_telemetry(equipment)
     current_rent = get_current_rental(equipment)
     anomalies = evaluate_equipment_anomalies(
         equipment=equipment,
