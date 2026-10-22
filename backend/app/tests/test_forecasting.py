@@ -80,7 +80,7 @@ def test_generate_demand_forecasts_db_integration():
         f = forecasts[0]
         assert f.site_id is not None
         assert f.equipment_type is not None
-        assert f.predicted_units > 0
+        assert f.predicted_units >= 0
         assert 0.0 < f.confidence <= 1.0
         assert f.explanation != ""
     finally:

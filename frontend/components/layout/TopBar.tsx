@@ -118,8 +118,8 @@ export function TopBar({
             OP
           </div>
           <div className="hidden sm:block text-left">
-            <p className="text-xs font-semibold text-black leading-tight">Marcus Vance</p>
-            <p className="text-[10px] text-[#7a7a7a] leading-none">Fleet Commander</p>
+            <p className="text-xs font-semibold text-black leading-tight">Fleet Operator</p>
+            <p className="text-[10px] text-[#7a7a7a] leading-none">Operations Console</p>
           </div>
         </div>
       </div>

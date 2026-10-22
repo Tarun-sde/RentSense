@@ -1,5 +1,7 @@
 import os
 import sys
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -24,9 +26,17 @@ from app.models import (
 )
 from app.analytics.forecasting import generate_demand_forecasts, sync_forecasts_to_db
 from app.core.security import hash_password
+from app.analytics.anomaly_engine import evaluate_equipment_anomalies
+from app.analytics.impact_engine import record_realized_action_savings
+from app.analytics.recommendation_engine import evaluate_equipment_recommendations
+from app.services.equipment_service import fleet_query
 
-# Deterministic anchor timestamp
+# Deterministic reference used only by tests; normal seeding uses the current UTC time.
 ANCHOR_TIME = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+DEMO_EQUIPMENT_IDS = tuple(f"EQX{number}" for number in range(1001, 1021))
+DEMO_SITE_IDS = tuple(f"SITE-{number:03}" for number in range(1, 6))
+DEMO_OPERATOR_IDS = tuple(f"OP-{number:03}" for number in range(1, 11))
+DEMO_REFRESH_CONFIRMATION = "REFRESH RENTSENSE DEMO DATA"
 
 
 def reset_database(db: Session):
@@ -42,23 +52,23 @@ def reset_database(db: Session):
     db.commit()
 
 
-def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None = None):
+def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None = None, allow_existing: bool = False, commit: bool = True):
     """
     Deterministic & Idempotent Database Seeder localized for Indian infrastructure operations.
-    Seeds the 7 challenge equipment assets, 3 sites, 4 operators, active & historical rentals,
+    Seeds 20 fictional equipment assets, 5 sites, 10 operators, active & historical rentals,
     telemetry streams, alerts, recommendations, actions, forecasts, and financial impact records.
     """
     Base.metadata.create_all(bind=db.get_bind())
     if reset:
         reset_database(db)
-    elif any(db.query(model).first() is not None for model in
+    elif not allow_existing and any(db.query(model).first() is not None for model in
              (Equipment, Rental, Telemetry, Site, Operator, Alert, Recommendation, Action, ImpactRecord, Forecast, AuditEvent)):
         # Existing data is never moved or partially reseeded on a restart.
         return
 
     base_time = anchor_time or datetime.now(timezone.utc).replace(microsecond=0)
 
-    # 1. Seed Sites (3 realistic Indian construction/mining operations)
+    # 1. Seed fictional operations at plausible Indian locations.
     sites_data = [
         {
             "id": "SITE-001",
@@ -84,6 +94,8 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "longitude": 76.9033,
             "created_at": base_time - timedelta(days=30),
         },
+        {"id": "SITE-004", "name": "Ahmedabad Metro Demo Package", "location": "Fictional east corridor works, Gujarat", "latitude": 23.0225, "longitude": 72.5714, "created_at": base_time - timedelta(days=55)},
+        {"id": "SITE-005", "name": "Nagpur Logistics Demo Hub", "location": "Fictional multimodal freight yard, Maharashtra", "latitude": 21.1458, "longitude": 79.0882, "created_at": base_time - timedelta(days=50)},
     ]
 
     for s_data in sites_data:
@@ -96,32 +108,38 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
 
     db.flush()
 
-    # 2. Seed Operators (4 authentic certified heavy machinery operators)
+    # 2. Seed clearly fictional demo operators; no personal contact details.
     operators_data = [
         {
             "id": "OP-001",
-            "name": "Rajesh Sharma",
-            "contact": "r.sharma@infraco.in | +91 98201 23456",
+            "name": "Demo Operator 01",
+            "contact": None,
             "created_at": base_time - timedelta(days=90),
         },
         {
             "id": "OP-002",
-            "name": "Priya Patel",
-            "contact": "p.patel@heavyworks.in | +91 98202 34567",
+            "name": "Demo Operator 02",
+            "contact": None,
             "created_at": base_time - timedelta(days=90),
         },
         {
             "id": "OP-003",
-            "name": "Amit Verma",
-            "contact": "a.verma@metrobuild.in | +91 98203 45678",
+            "name": "Demo Operator 03",
+            "contact": None,
             "created_at": base_time - timedelta(days=75),
         },
         {
             "id": "OP-004",
-            "name": "Sunita Rao",
-            "contact": "s.rao@apexops.in | +91 98204 56789",
+            "name": "Demo Operator 04",
+            "contact": None,
             "created_at": base_time - timedelta(days=60),
         },
+        {"id": "OP-005", "name": "Demo Operator 05", "contact": None, "created_at": base_time - timedelta(days=80)},
+        {"id": "OP-006", "name": "Demo Operator 06", "contact": None, "created_at": base_time - timedelta(days=75)},
+        {"id": "OP-007", "name": "Demo Operator 07", "contact": None, "created_at": base_time - timedelta(days=70)},
+        {"id": "OP-008", "name": "Demo Operator 08", "contact": None, "created_at": base_time - timedelta(days=65)},
+        {"id": "OP-009", "name": "Demo Operator 09", "contact": None, "created_at": base_time - timedelta(days=60)},
+        {"id": "OP-010", "name": "Demo Operator 10", "contact": None, "created_at": base_time - timedelta(days=55)},
     ]
 
     for o_data in operators_data:
@@ -192,6 +210,19 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "metadata_json": {"model": "Sany SPA200 Articulated Boom", "serial": "SANY-SPA-5520", "qr_code": "EQX1007"},
             "created_at": base_time - timedelta(days=10),
         },
+        {"id": "EQX1008", "type": "Excavator", "dealer": "Demo Fleet Partners", "daily_rate": 21000.0, "metadata_json": {"model": "ZX210 Demo", "serial": "DEMO-1008", "qr_code": "EQX1008"}, "created_at": base_time - timedelta(days=32)},
+        {"id": "EQX1009", "type": "Motor Grader", "dealer": "Demo Fleet Partners", "daily_rate": 23000.0, "metadata_json": {"model": "GD535 Demo", "serial": "DEMO-1009", "qr_code": "EQX1009"}, "created_at": base_time - timedelta(days=29)},
+        {"id": "EQX1010", "type": "Mobile Crane", "dealer": "Demo Lift Systems", "daily_rate": 32000.0, "metadata_json": {"model": "75T Demo Crane", "serial": "DEMO-1010", "qr_code": "EQX1010"}, "created_at": base_time - timedelta(days=28)},
+        {"id": "EQX1011", "type": "Concrete Pump", "dealer": "Demo Concrete Systems", "daily_rate": 18000.0, "metadata_json": {"model": "42M Demo Pump", "serial": "DEMO-1011", "qr_code": "EQX1011"}, "created_at": base_time - timedelta(days=26)},
+        {"id": "EQX1012", "type": "Wheel Loader", "dealer": "Demo Fleet Partners", "daily_rate": 16500.0, "metadata_json": {"model": "L120 Demo", "serial": "DEMO-1012", "qr_code": "EQX1012"}, "created_at": base_time - timedelta(days=24)},
+        {"id": "EQX1013", "type": "Generator", "dealer": "Demo Power Rentals", "daily_rate": 6500.0, "metadata_json": {"model": "200kVA Demo DG", "serial": "DEMO-1013", "qr_code": "EQX1013"}, "created_at": base_time - timedelta(days=22)},
+        {"id": "EQX1014", "type": "Excavator", "dealer": "Demo Fleet Partners", "daily_rate": 19500.0, "metadata_json": {"model": "PC210 Demo", "serial": "DEMO-1014", "qr_code": "EQX1014"}, "created_at": base_time - timedelta(days=21)},
+        {"id": "EQX1015", "type": "Bulldozer", "dealer": "Demo Earthworks", "daily_rate": 27000.0, "metadata_json": {"model": "D6 Demo", "serial": "DEMO-1015", "qr_code": "EQX1015"}, "created_at": base_time - timedelta(days=19)},
+        {"id": "EQX1016", "type": "Boom Lift", "dealer": "Demo Access Rentals", "daily_rate": 10500.0, "metadata_json": {"model": "Z60 Demo", "serial": "DEMO-1016", "qr_code": "EQX1016"}, "created_at": base_time - timedelta(days=17)},
+        {"id": "EQX1017", "type": "Soil Compactor", "dealer": "Demo Road Systems", "daily_rate": 12500.0, "metadata_json": {"model": "CS12 Demo", "serial": "DEMO-1017", "qr_code": "EQX1017"}, "created_at": base_time - timedelta(days=16)},
+        {"id": "EQX1018", "type": "Forklift", "dealer": "Demo Logistics Equipment", "daily_rate": 8000.0, "metadata_json": {"model": "5T Demo Forklift", "serial": "DEMO-1018", "qr_code": "EQX1018"}, "created_at": base_time - timedelta(days=14)},
+        {"id": "EQX1019", "type": "Water Tanker", "dealer": "Demo Site Services", "daily_rate": 9000.0, "metadata_json": {"model": "12KL Demo Tanker", "serial": "DEMO-1019", "qr_code": "EQX1019"}, "created_at": base_time - timedelta(days=13)},
+        {"id": "EQX1020", "type": "Scissor Lift", "dealer": "Demo Access Rentals", "daily_rate": 8500.0, "metadata_json": {"model": "S4046 Demo", "serial": "DEMO-1020", "qr_code": "EQX1020"}, "created_at": base_time - timedelta(days=11)},
     ]
 
     for eq_data in equipment_data:
@@ -320,12 +351,24 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "site_id": "SITE-003",
             "operator_id": "OP-003",
             "checked_out_at": base_time - timedelta(days=9),
-            "due_at": base_time - timedelta(days=4),
+            "due_at": base_time - timedelta(days=1),
             "checked_in_at": base_time - timedelta(days=3),
             "daily_rate": 9500.0,
             "condition_notes": "Returned clean, full tank, parked in central depot staging yard.",
             "created_at": base_time - timedelta(days=9),
         },
+        {"equipment_id": "EQX1008", "site_id": "SITE-004", "operator_id": "OP-005", "checked_out_at": base_time - timedelta(days=6), "due_at": base_time + timedelta(days=9), "checked_in_at": None, "daily_rate": 21000.0, "condition_notes": "Metro station-box excavation in the fictional demo package.", "created_at": base_time - timedelta(days=6)},
+        {"equipment_id": "EQX1009", "site_id": "SITE-004", "operator_id": "OP-006", "checked_out_at": base_time - timedelta(days=5), "due_at": base_time + timedelta(days=8), "checked_in_at": None, "daily_rate": 23000.0, "condition_notes": "Formation grading for the demo corridor.", "created_at": base_time - timedelta(days=5)},
+        {"equipment_id": "EQX1010", "site_id": "SITE-005", "operator_id": "OP-007", "checked_out_at": base_time - timedelta(days=4), "due_at": base_time + timedelta(days=11), "checked_in_at": None, "daily_rate": 32000.0, "condition_notes": "Container handling structure erection at the fictional logistics hub.", "created_at": base_time - timedelta(days=4)},
+        {"equipment_id": "EQX1011", "site_id": "SITE-004", "operator_id": "OP-008", "checked_out_at": base_time - timedelta(days=3), "due_at": base_time + timedelta(days=6), "checked_in_at": None, "daily_rate": 18000.0, "condition_notes": "Viaduct pier concrete placement.", "created_at": base_time - timedelta(days=3)},
+        {"equipment_id": "EQX1012", "site_id": "SITE-005", "operator_id": "OP-009", "checked_out_at": base_time - timedelta(days=7), "due_at": base_time + timedelta(days=5), "checked_in_at": None, "daily_rate": 16500.0, "condition_notes": "Standby loader awaiting inbound aggregate; reassignment candidate.", "created_at": base_time - timedelta(days=7)},
+        {"equipment_id": "EQX1013", "site_id": "SITE-005", "operator_id": "OP-010", "checked_out_at": base_time - timedelta(days=5), "due_at": base_time + timedelta(hours=30), "checked_in_at": None, "daily_rate": 6500.0, "condition_notes": "Temporary warehouse commissioning power; return preparation required.", "created_at": base_time - timedelta(days=5)},
+        {"equipment_id": "EQX1014", "site_id": "SITE-001", "operator_id": "OP-005", "checked_out_at": base_time - timedelta(days=9), "due_at": base_time - timedelta(days=1), "checked_in_at": None, "daily_rate": 19500.0, "condition_notes": "Demo mining bench cleanup awaiting off-rent inspection.", "created_at": base_time - timedelta(days=9)},
+        {"equipment_id": "EQX1015", "site_id": "SITE-002", "operator_id": "OP-006", "checked_out_at": base_time - timedelta(days=4), "due_at": base_time + timedelta(days=10), "checked_in_at": None, "daily_rate": 27000.0, "condition_notes": "Airside demo earthworks.", "created_at": base_time - timedelta(days=4)},
+        {"equipment_id": "EQX1016", "site_id": "SITE-003", "operator_id": "OP-007", "checked_out_at": base_time - timedelta(days=3), "due_at": base_time + timedelta(days=7), "checked_in_at": None, "daily_rate": 10500.0, "condition_notes": "Wind-tower demo inspection support.", "created_at": base_time - timedelta(days=3)},
+        {"equipment_id": "EQX1017", "site_id": "SITE-004", "operator_id": "OP-008", "checked_out_at": base_time - timedelta(days=6), "due_at": base_time + timedelta(days=7), "checked_in_at": None, "daily_rate": 12500.0, "condition_notes": "Compactor held idle after workfront sequencing changed.", "created_at": base_time - timedelta(days=6)},
+        {"equipment_id": "EQX1018", "site_id": "SITE-005", "operator_id": "OP-009", "checked_out_at": base_time - timedelta(days=2), "due_at": base_time + timedelta(days=8), "checked_in_at": None, "daily_rate": 8000.0, "condition_notes": "Active pallet movement in the fictional freight yard.", "created_at": base_time - timedelta(days=2)},
+        {"equipment_id": "EQX1019", "site_id": "SITE-005", "operator_id": "OP-010", "checked_out_at": base_time - timedelta(days=12), "due_at": base_time - timedelta(days=5), "checked_in_at": base_time - timedelta(days=6), "daily_rate": 9000.0, "condition_notes": "Completed dust-suppression package and returned to depot.", "created_at": base_time - timedelta(days=12)},
     ]
 
     for r_data in rentals_data:
@@ -379,11 +422,24 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "lat": 13.6075, "lng": 76.9045,
             "engine_base": 0.0, "idle_base": 0.0, "fuel": 100.0
         },
+        "EQX1008": {"lat": 23.0228, "lng": 72.5711, "engine_base": 31.0, "idle_base": 3.2, "fuel": 63.0},
+        "EQX1009": {"lat": 23.0219, "lng": 72.5720, "engine_base": 25.0, "idle_base": 2.5, "fuel": 71.0},
+        "EQX1010": {"lat": 21.1462, "lng": 79.0885, "engine_base": 18.0, "idle_base": 1.2, "fuel": 76.0},
+        "EQX1011": {"lat": 23.0231, "lng": 72.5708, "engine_base": 21.0, "idle_base": 2.0, "fuel": 69.0},
+        "EQX1012": {"lat": 21.1454, "lng": 79.0878, "engine_base": 12.0, "idle_base": 9.5, "fuel": 84.0},
+        "EQX1013": {"lat": 21.1460, "lng": 79.0890, "engine_base": 36.0, "idle_base": 2.0, "fuel": 41.0},
+        "EQX1014": {"lat": 18.7177, "lng": 81.2586, "engine_base": 29.0, "idle_base": 3.0, "fuel": 58.0},
+        "EQX1015": {"lat": 18.9887, "lng": 73.0643, "engine_base": 33.0, "idle_base": 3.5, "fuel": 54.0},
+        "EQX1016": {"lat": 13.6069, "lng": 76.9030, "engine_base": 17.0, "idle_base": 1.4, "fuel": 73.0},
+        "EQX1017": {"lat": 23.0222, "lng": 72.5718, "engine_base": 10.0, "idle_base": 8.5, "fuel": 88.0},
+        "EQX1018": {"lat": 21.1459, "lng": 79.0879, "engine_base": 14.0, "idle_base": 1.0, "fuel": 79.0},
+        "EQX1019": {"lat": 21.1448, "lng": 79.0869, "engine_base": 11.0, "idle_base": 1.5, "fuel": 92.0},
+        "EQX1020": {"lat": 21.1445, "lng": 79.0865, "engine_base": 0.0, "idle_base": 0.0, "fuel": 100.0},
     }
 
     for eq_id, profile in telemetry_profiles.items():
         for i in range(6):
-            t_offset = timedelta(hours=(5 - i) * 4)
+            t_offset = timedelta(hours=(5 - i) * 4, minutes=15)
             t_timestamp = base_time - t_offset
             step_factor = (i + 1) / 6.0
 
@@ -413,80 +469,14 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
 
     # 6. Seed Alerts (Active Open Alerts + Historical Resolved Alerts)
     alerts_data = [
-        # Open Alert 1: EQX1001 EXCESSIVE_IDLE
-        {
-            "equipment_id": "EQX1001",
-            "alert_type": "EXCESSIVE_IDLE",
-            "severity": "CRITICAL",
-            "message": "Asset EQX1001 has accumulated 14.2h of idle engine time, exceeding the acceptable operational threshold of 8.0h (Total engine runtime: 16.0h).",
-            "status": "OPEN",
-            "metadata_json": {"idle_hours": 14.2, "threshold_hours": 8.0, "engine_hours": 16.0, "anomaly_score": 85, "recommended_action": "REASSIGN_EQUIPMENT"},
-            "created_at": base_time - timedelta(hours=8),
-            "resolved_at": None,
-        },
-        # Open Alert 2: EQX1001 LOW_UTILIZATION
-        {
-            "equipment_id": "EQX1001",
-            "alert_type": "LOW_UTILIZATION",
-            "severity": "CRITICAL",
-            "message": "Asset EQX1001 has an active utilization rate of 11.2% (1.8h active out of 16.0h engine runtime), falling below the 20% operational threshold.",
-            "status": "OPEN",
-            "metadata_json": {"utilization_rate": 0.1125, "threshold": 0.20, "active_hours": 1.8, "engine_hours": 16.0, "idle_hours": 14.2, "anomaly_score": 75, "recommended_action": "REASSIGN_EQUIPMENT"},
-            "created_at": base_time - timedelta(hours=8),
-            "resolved_at": None,
-        },
-        # Open Alert 3: EQX1002 MISSING_ASSIGNMENT
-        {
-            "equipment_id": "EQX1002",
-            "alert_type": "MISSING_ASSIGNMENT",
-            "severity": "CRITICAL",
-            "message": "Asset EQX1002 has an active rental (Contract) but lacks a certified operator assignment.",
-            "status": "OPEN",
-            "metadata_json": {"missing_fields": ["operator"], "site_id": "SITE-002", "operator_id": None, "anomaly_score": 75, "recommended_action": "ASSIGN_OPERATOR"},
-            "created_at": base_time - timedelta(hours=12),
-            "resolved_at": None,
-        },
-        # Open Alert 4: EQX1002 LOW_UTILIZATION
-        {
-            "equipment_id": "EQX1002",
-            "alert_type": "LOW_UTILIZATION",
-            "severity": "CRITICAL",
-            "message": "Asset EQX1002 has an active utilization rate of 10.0% (0.2h active out of 2.0h engine runtime), falling below the 20% operational threshold.",
-            "status": "OPEN",
-            "metadata_json": {"utilization_rate": 0.10, "threshold": 0.20, "active_hours": 0.2, "engine_hours": 2.0, "idle_hours": 1.8, "anomaly_score": 75, "recommended_action": "REASSIGN_EQUIPMENT"},
-            "created_at": base_time - timedelta(hours=12),
-            "resolved_at": None,
-        },
-        # Open Alert 5: EQX1004 DUE_SOON
-        {
-            "equipment_id": "EQX1004",
-            "alert_type": "DUE_SOON",
-            "severity": "MEDIUM",
-            "message": "Rental for Generator EQX1004 expires within 24 hours. Prepare return handoff or extension.",
-            "status": "OPEN",
-            "metadata_json": {"hours_remaining": 20, "site_id": "SITE-002"},
-            "created_at": base_time - timedelta(hours=4),
-            "resolved_at": None,
-        },
-        # Open Alert 6: EQX1006 OVERDUE
-        {
-            "equipment_id": "EQX1006",
-            "alert_type": "OVERDUE",
-            "severity": "CRITICAL",
-            "message": f"Rental contract for EQX1006 is 48.0h overdue (scheduled return was {(base_time - timedelta(days=2)):%Y-%m-%d %H:%M UTC}). Rate surcharge is active at ₹7,500.00/day.",
-            "status": "OPEN",
-            "metadata_json": {"overdue_hours": 48.0, "daily_rate": 7500.0, "anomaly_score": 84, "recommended_action": "INITIATE_RETURN"},
-            "created_at": base_time - timedelta(days=2),
-            "resolved_at": None,
-        },
-        # Historical Resolved Alert 7: EQX1003 EXCESSIVE_IDLE (Resolved by completed action)
+        # Historical low utilization resolved by a completed reassignment.
         {
             "equipment_id": "EQX1003",
-            "alert_type": "EXCESSIVE_IDLE",
+            "alert_type": "LOW_UTILIZATION",
             "severity": "HIGH",
-            "message": "Asset EQX1003 accumulated 9.5h idle runtime during initial staging.",
+            "message": "Asset EQX1003 had low utilization during initial staging (historical demo event).",
             "status": "RESOLVED",
-            "metadata_json": {"idle_hours": 9.5, "threshold_hours": 8.0, "resolution": "Reassigned to Bailadila Deposit 14"},
+            "metadata_json": {"resolution": "Reassigned to Bailadila Deposit 14"},
             "created_at": base_time - timedelta(days=20),
             "resolved_at": base_time - timedelta(days=18),
         },
@@ -515,15 +505,27 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
         # Historical Resolved Alert 10: EQX1007 OVERDUE (Resolved by completed check-in)
         {
             "equipment_id": "EQX1007",
-            "alert_type": "OVERDUE",
-            "severity": "CRITICAL",
-            "message": "Rental contract for EQX1007 was overdue following turbine cabling.",
+            "alert_type": "DUE_SOON",
+            "severity": "MEDIUM",
+            "message": "Rental contract for EQX1007 approached its planned return following turbine cabling.",
             "status": "RESOLVED",
             "metadata_json": {"resolution": "Off-rent check-in completed early"},
             "created_at": base_time - timedelta(days=4),
             "resolved_at": base_time - timedelta(days=3),
         },
     ]
+
+    for equipment, rental, latest in fleet_query(db).filter(Equipment.id.in_(DEMO_EQUIPMENT_IDS)).all():
+        equipment._fleet_snapshot = (rental, latest)
+        for anomaly in evaluate_equipment_anomalies(equipment, rental, latest, now=base_time):
+            alerts_data.append(dict(equipment_id=equipment.id, alert_type=anomaly.anomaly_type,
+                severity=anomaly.severity, message=anomaly.explanation, status="OPEN",
+                metadata_json={**anomaly.supporting_signals, "anomaly_score": anomaly.anomaly_score},
+                created_at=base_time, resolved_at=None))
+        if rental and rental.due_at and base_time <= rental.due_at.replace(tzinfo=timezone.utc) <= base_time + timedelta(hours=48):
+            alerts_data.append(dict(equipment_id=equipment.id, alert_type="DUE_SOON", severity="MEDIUM",
+                message=f"Demo rental for {equipment.id} is due within 48 hours.", status="OPEN",
+                metadata_json={"site_id": rental.site_id}, created_at=base_time, resolved_at=None))
 
     for a_data in alerts_data:
         existing = (
@@ -542,81 +544,6 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
 
     # 7. Seed Recommendations (Deterministically matching Recommendation Engine)
     recommendations_data = [
-        # Rec 1: EQX1001 REASSIGN
-        {
-            "equipment_id": "EQX1001",
-            "recommendation_type": "REASSIGN",
-            "priority": "CRITICAL",
-            "explanation": "EQX1001 has remained rented while recording 14.2h idle time and only 11.2% utilization. Reassigning the asset to Kallambella Wind Energy Corridor will eliminate standby costs, saving an estimated ₹37,000.00.",
-            "action": "Reallocate asset to Kallambella Wind Energy Corridor to recover utilization",
-            "confidence": 0.92,
-            "estimated_impact": {
-                "impact_type": "IDLE_AVOIDANCE",
-                "estimated_savings_usd": 37000.0,
-                "daily_rate": 18500.0,
-                "avoidable_days": 2.0,
-                "calculation_basis": "2.0 avoidable idle days × ₹18,500.00/day rate = ₹37,000.00",
-            },
-            "status": "PENDING",
-            "created_at": base_time - timedelta(hours=8),
-            "resolved_at": None,
-        },
-        # Rec 2: EQX1002 REASSIGN
-        {
-            "equipment_id": "EQX1002",
-            "recommendation_type": "REASSIGN",
-            "priority": "CRITICAL",
-            "explanation": "EQX1002 has remained rented while recording 1.8h idle time and only 10.0% utilization. Reassigning the asset to Kallambella Wind Energy Corridor will eliminate standby costs, saving an estimated ₹26,000.00.",
-            "action": "Reallocate asset to Kallambella Wind Energy Corridor to recover utilization",
-            "confidence": 0.92,
-            "estimated_impact": {
-                "impact_type": "IDLE_AVOIDANCE",
-                "estimated_savings_usd": 26000.0,
-                "daily_rate": 26000.0,
-                "avoidable_days": 1.0,
-                "calculation_basis": "1.0 avoidable idle days × ₹26,000.00/day rate = ₹26,000.00",
-            },
-            "status": "PENDING",
-            "created_at": base_time - timedelta(hours=12),
-            "resolved_at": None,
-        },
-        # Rec 3: EQX1006 RETURN
-        {
-            "equipment_id": "EQX1006",
-            "recommendation_type": "RETURN",
-            "priority": "CRITICAL",
-            "explanation": "Asset EQX1006 is 48.0 hours overdue under Contract. Initiating an off-rent return will immediately eliminate ongoing ₹7,500.00/day surcharge penalties.",
-            "action": "Initiate off-rent check-in to eliminate ₹7,500.00/day surcharge",
-            "confidence": 0.95,
-            "estimated_impact": {
-                "impact_type": "OVERDUE_SURCHARGE_AVOIDED",
-                "estimated_savings_usd": 20250.0,
-                "daily_rate": 7500.0,
-                "days_overdue": 2.7,
-                "calculation_basis": "2.7 overdue days × ₹7,500.00/day surcharge = ₹20,250.00",
-            },
-            "status": "PENDING",
-            "created_at": base_time - timedelta(days=2),
-            "resolved_at": None,
-        },
-        # Rec 4: EQX1002 INVESTIGATE
-        {
-            "equipment_id": "EQX1002",
-            "recommendation_type": "INVESTIGATE",
-            "priority": "HIGH",
-            "explanation": "Asset EQX1002 is deployed at Navi Mumbai International Airport without an assigned certified operator. Assigning an authorized driver will unlock scheduled site operations.",
-            "action": "Assign certified equipment operator to active deployment",
-            "confidence": 0.88,
-            "estimated_impact": {
-                "impact_type": "UTILIZATION_RECOVERY",
-                "estimated_savings_usd": 52000.0,
-                "daily_rate": 26000.0,
-                "calculation_basis": "2 days deployment recovery × ₹26,000.00/day = ₹52,000.00",
-            },
-            "status": "IN_PROGRESS",
-            "created_at": base_time - timedelta(hours=12),
-            "resolved_at": None,
-        },
         # Historical Completed Recommendations
         {
             "equipment_id": "EQX1003",
@@ -668,6 +595,13 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
         },
     ]
 
+    for equipment, rental, latest in fleet_query(db).filter(Equipment.id.in_(DEMO_EQUIPMENT_IDS)).all():
+        equipment._fleet_snapshot = (rental, latest)
+        for recommendation in evaluate_equipment_recommendations(equipment, rental, latest, now=base_time):
+            recommendations_data.append({key: getattr(recommendation, key) for key in (
+                "equipment_id", "recommendation_type", "priority", "explanation", "action",
+                "confidence", "estimated_impact", "status", "created_at")})
+
     for r_data in recommendations_data:
         existing = (
             db.query(Recommendation)
@@ -707,8 +641,8 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "PENDING",
             "priority": "CRITICAL",
             "notes": "Reassign under-utilized excavator from Bailadila to Kallambella Wind Corridor",
-            "actor": "Commander Marcus Vance",
-            "payload_json": {"target_site_id": "SITE-003", "estimated_savings_usd": 37000.0},
+            "actor": "Fleet Operator",
+            "payload_json": {"target_site_id": "SITE-003", "estimated_savings_usd": rec_eq1001_reassign.estimated_impact["estimated_savings_usd"]},
             "created_at": base_time - timedelta(hours=8),
             "completed_at": None,
         },
@@ -721,8 +655,8 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "IN_PROGRESS",
             "priority": "HIGH",
             "notes": "Operator dispatch in progress for unassigned bulldozer at NMIA staging",
-            "actor": "Commander Marcus Vance",
-            "payload_json": {"target_operator_id": "OP-001", "estimated_savings_usd": 52000.0},
+            "actor": "Fleet Operator",
+            "payload_json": {"target_operator_id": "OP-001", "estimated_savings_usd": rec_eq1002_investigate.estimated_impact["estimated_savings_usd"]},
             "created_at": base_time - timedelta(hours=6),
             "completed_at": None,
         },
@@ -735,8 +669,8 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "PENDING",
             "priority": "CRITICAL",
             "notes": "Initiate return check-in for overdue scissor lift at Kallambella Corridor",
-            "actor": "Commander Marcus Vance",
-            "payload_json": {"estimated_savings_usd": 20250.0},
+            "actor": "Fleet Operator",
+            "payload_json": {"estimated_savings_usd": rec_eq1006_return.estimated_impact["estimated_savings_usd"]},
             "created_at": base_time - timedelta(hours=12),
             "completed_at": None,
         },
@@ -749,7 +683,7 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "COMPLETED",
             "priority": "HIGH",
             "notes": "Reassigned wheel loader to Bailadila Iron Ore Complex Deposit 14",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "payload_json": {"target_site_id": "SITE-001"},
             "created_at": base_time - timedelta(days=20),
             "completed_at": base_time - timedelta(days=18),
@@ -763,7 +697,7 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "COMPLETED",
             "priority": "MEDIUM",
             "notes": "Seamlessly extended runway compaction contract by 7 days",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "payload_json": {"extension_days": 7},
             "created_at": base_time - timedelta(days=16),
             "completed_at": base_time - timedelta(days=15),
@@ -777,7 +711,7 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "COMPLETED",
             "priority": "MEDIUM",
             "notes": "Verified auxiliary generator sensor linkage at NMIA staging",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "payload_json": {"target_operator_id": "OP-003"},
             "created_at": base_time - timedelta(days=12),
             "completed_at": base_time - timedelta(days=10),
@@ -791,7 +725,7 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
             "status": "COMPLETED",
             "priority": "CRITICAL",
             "notes": "Off-rent return completed on schedule following wind tower cabling",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "payload_json": {"condition": "clean, full tank"},
             "created_at": base_time - timedelta(days=4),
             "completed_at": base_time - timedelta(days=3),
@@ -813,90 +747,17 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
 
     db.flush()
 
-    # Query completed actions to link ImpactRecords
-    act_eq1003 = db.query(Action).filter(Action.equipment_id == "EQX1003", Action.action_type == "REASSIGN", Action.status == "COMPLETED").first()
-    act_eq1005 = db.query(Action).filter(Action.equipment_id == "EQX1005", Action.action_type == "EXTEND", Action.status == "COMPLETED").first()
-    act_eq1004 = db.query(Action).filter(Action.equipment_id == "EQX1004", Action.action_type == "INVESTIGATE", Action.status == "COMPLETED").first()
-    act_eq1007 = db.query(Action).filter(Action.equipment_id == "EQX1007", Action.action_type == "RETURN", Action.status == "COMPLETED").first()
-
-    # 9. Seed Impact Records (Realized Savings from Completed Actions)
-    # Exact calculation basis verified against app/analytics/impact_engine.py
-    impact_data = [
-        # Impact 1: EQX1003 IDLE_AVOIDANCE (3 days × ₹15,000 = ₹45,000)
-        {
-            "action_id": act_eq1003.id if act_eq1003 else None,
-            "equipment_id": "EQX1003",
-            "site_id": "SITE-001",
-            "impact_type": "IDLE_AVOIDANCE",
-            "estimated_amount": 45000.0,
-            "realized_amount": 45000.0,
-            "currency": "INR",
-            "calculation_basis": "Reassigned asset to high-demand site (SITE-001): 3.0 avoidable standby days × ₹15,000.00/day = ₹45,000.00",
-            "before_state": {"action_type": "REASSIGN", "equipment_id": "EQX1003", "daily_rate": 15000.0},
-            "after_state": {"action_status": "COMPLETED", "completed_at": (base_time - timedelta(days=18)).isoformat(), "target_site_id": "SITE-001"},
-            "calculated_at": base_time - timedelta(days=18),
-        },
-        # Impact 2: EQX1005 RECONTRACTING_PREMIUM_AVOIDED (7 days × ₹24,000 × 0.25 = ₹42,000)
-        {
-            "action_id": act_eq1005.id if act_eq1005 else None,
-            "equipment_id": "EQX1005",
-            "site_id": "SITE-002",
-            "impact_type": "RECONTRACTING_PREMIUM_AVOIDED",
-            "estimated_amount": 42000.0,
-            "realized_amount": 42000.0,
-            "currency": "INR",
-            "calculation_basis": "Seamlessly extended contract by 7 days: Avoided re-dispatch overhead = ₹42,000.00",
-            "before_state": {"action_type": "EXTEND", "equipment_id": "EQX1005", "daily_rate": 24000.0},
-            "after_state": {"action_status": "COMPLETED", "completed_at": (base_time - timedelta(days=15)).isoformat(), "target_site_id": "SITE-002"},
-            "calculated_at": base_time - timedelta(days=15),
-        },
-        # Impact 3: EQX1004 UTILIZATION_RECOVERY (1.0 day × ₹5,500 = ₹5,500)
-        {
-            "action_id": act_eq1004.id if act_eq1004 else None,
-            "equipment_id": "EQX1004",
-            "site_id": "SITE-002",
-            "impact_type": "UTILIZATION_RECOVERY",
-            "estimated_amount": 5500.0,
-            "realized_amount": 5500.0,
-            "currency": "INR",
-            "calculation_basis": "Resolved jobsite staging anomaly: 1.0 day operational recovery × ₹5,500.00/day = ₹5,500.00",
-            "before_state": {"action_type": "INVESTIGATE", "equipment_id": "EQX1004", "daily_rate": 5500.0},
-            "after_state": {"action_status": "COMPLETED", "completed_at": (base_time - timedelta(days=10)).isoformat(), "target_site_id": "SITE-002"},
-            "calculated_at": base_time - timedelta(days=10),
-        },
-        # Impact 4: EQX1007 EARLY_RETURN (2.0 days × ₹9,500 = ₹19,000)
-        {
-            "action_id": act_eq1007.id if act_eq1007 else None,
-            "equipment_id": "EQX1007",
-            "site_id": "SITE-003",
-            "impact_type": "EARLY_RETURN",
-            "estimated_amount": 19000.0,
-            "realized_amount": 19000.0,
-            "currency": "INR",
-            "calculation_basis": "Off-rent return completed early: 2.0 unused days × ₹9,500.00/day = ₹19,000.00",
-            "before_state": {"action_type": "RETURN", "equipment_id": "EQX1007", "daily_rate": 9500.0},
-            "after_state": {"action_status": "COMPLETED", "completed_at": (base_time - timedelta(days=3)).isoformat(), "target_site_id": "SITE-003"},
-            "calculated_at": base_time - timedelta(days=3),
-        },
-    ]
-
-    for imp_data in impact_data:
-        existing = (
-            db.query(ImpactRecord)
-            .filter(
-                ImpactRecord.equipment_id == imp_data["equipment_id"],
-                ImpactRecord.calculated_at == imp_data["calculated_at"],
-            )
-            .first()
-        )
-        if not existing:
-            db.add(ImpactRecord(**imp_data))
-
+    for action in db.query(Action).filter(Action.equipment_id.in_(DEMO_EQUIPMENT_IDS), Action.status == "COMPLETED").all():
+        equipment = db.get(Equipment, action.equipment_id)
+        rental = db.query(Rental).filter(Rental.equipment_id == equipment.id,
+            Rental.checked_out_at <= action.completed_at).order_by(Rental.checked_out_at.desc()).first()
+        record_realized_action_savings(db, action, equipment, rental,
+            action.payload_json, now=action.completed_at.replace(tzinfo=timezone.utc), commit=False)
     db.flush()
 
-    # 10. Seed Deterministic Demand Forecasts (72 records: 3 sites × 6 types × 4 weeks)
-    forecast_records = generate_demand_forecasts(db=db, horizon_weeks=4, now=base_time)
-    sync_forecasts_to_db(db=db, forecasts=forecast_records)
+    # 10. Seed forecasts inside the caller's transaction.
+    forecast_records = [record for record in generate_demand_forecasts(db=db, horizon_weeks=4, now=base_time) if record.site_id in DEMO_SITE_IDS]
+    sync_forecasts_to_db(db=db, forecasts=forecast_records, commit=False)
 
     # 11. Seed Audit Trail History
     audit_events_data = [
@@ -947,28 +808,28 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
         {
             "event_type": "EQUIPMENT_REASSIGNED",
             "equipment_id": "EQX1003",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(days=18),
             "metadata_json": {"action_type": "REASSIGN", "target_site_id": "SITE-001", "realized_savings": 45000.0},
         },
         {
             "event_type": "RENTAL_EXTENDED",
             "equipment_id": "EQX1005",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(days=15),
             "metadata_json": {"action_type": "EXTEND", "extension_days": 7, "realized_savings": 42000.0},
         },
         {
             "event_type": "INVESTIGATION_COMPLETED",
             "equipment_id": "EQX1004",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(days=10),
             "metadata_json": {"action_type": "INVESTIGATE", "target_operator_id": "OP-003", "realized_savings": 5500.0},
         },
         {
             "event_type": "RETURN_COMPLETED",
             "equipment_id": "EQX1007",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(days=3),
             "metadata_json": {"action_type": "RETURN", "condition": "Returned clean, full tank", "realized_savings": 19000.0},
         },
@@ -982,21 +843,21 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
         {
             "event_type": "ACTION_CREATED",
             "equipment_id": "EQX1001",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(hours=8),
             "metadata_json": {"action_type": "REASSIGN", "priority": "CRITICAL"},
         },
         {
             "event_type": "ACTION_CREATED",
             "equipment_id": "EQX1002",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(hours=6),
             "metadata_json": {"action_type": "INVESTIGATE", "priority": "HIGH"},
         },
         {
             "event_type": "ACTION_CREATED",
             "equipment_id": "EQX1006",
-            "actor": "Commander Marcus Vance",
+            "actor": "Fleet Operator",
             "timestamp": base_time - timedelta(hours=12),
             "metadata_json": {"action_type": "RETURN", "priority": "CRITICAL"},
         },
@@ -1029,17 +890,137 @@ def seed_database(db: Session, reset: bool = False, anchor_time: datetime | None
         if not db.query(User).filter(User.email == u_data["email"]).first():
             db.add(User(**u_data))
 
-    db.commit()
+    db.flush()
+    owner = db.get(Equipment, "EQX1001")
+    owner.metadata_json = {**owner.metadata_json, "demo_fingerprint": demo_fingerprint(db)}
+    db.flush()
+    if commit:
+        db.commit()
     print("Database seeding completed successfully.")
+
+
+def demo_fingerprint(db: Session) -> str:
+    """Exact domain snapshot: additions or edits invalidate destructive refresh ownership."""
+    snapshot = {}
+    for model in (Equipment, Site, Operator, Rental, Telemetry, Alert, Recommendation, Action, ImpactRecord, Forecast, AuditEvent):
+        if model is Equipment:
+            query = db.query(model).filter(model.id.in_(DEMO_EQUIPMENT_IDS))
+        elif model is Site:
+            query = db.query(model).filter(model.id.in_(DEMO_SITE_IDS))
+        elif model is Operator:
+            query = db.query(model).filter(model.id.in_(DEMO_OPERATOR_IDS))
+        elif model is Forecast:
+            query = db.query(model).filter(model.site_id.in_(DEMO_SITE_IDS))
+        else:
+            query = db.query(model).filter(model.equipment_id.in_(DEMO_EQUIPMENT_IDS))
+        rows = []
+        for row in query.order_by(model.id).all():
+            values = {}
+            for column in model.__table__.columns:
+                value = getattr(row, column.name)
+                if isinstance(value, datetime):
+                    value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+                    value = value.isoformat()
+                if model is Equipment and column.name == "metadata_json" and value:
+                    value = {key: item for key, item in value.items() if key != "demo_fingerprint"}
+                # Storing the fingerprint itself triggers this ORM-managed timestamp.
+                if model is Equipment and column.name == "updated_at":
+                    continue
+                values[column.name] = value
+            rows.append(values)
+        snapshot[model.__tablename__] = rows
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+
+
+def demo_refresh_preview(db: Session) -> dict:
+    """Describe only known demo-owned rows and flag ambiguous external references."""
+    unknown_equipment = ~Rental.equipment_id.in_(DEMO_EQUIPMENT_IDS)
+    blockers = db.query(Rental).filter(
+        unknown_equipment,
+        (Rental.site_id.in_(DEMO_SITE_IDS)) | (Rental.operator_id.in_(DEMO_OPERATOR_IDS)),
+    ).count()
+    blockers += db.query(Action).filter(~Action.equipment_id.in_(DEMO_EQUIPMENT_IDS),
+        Action.recommendation_id.in_(db.query(Recommendation.id).filter(Recommendation.equipment_id.in_(DEMO_EQUIPMENT_IDS))) |
+        Action.alert_id.in_(db.query(Alert.id).filter(Alert.equipment_id.in_(DEMO_EQUIPMENT_IDS)))).count()
+    blockers += db.query(ImpactRecord).filter(~ImpactRecord.equipment_id.in_(DEMO_EQUIPMENT_IDS),
+        ImpactRecord.site_id.in_(DEMO_SITE_IDS) |
+        ImpactRecord.action_id.in_(db.query(Action.id).filter(Action.equipment_id.in_(DEMO_EQUIPMENT_IDS)))).count()
+    counts = {
+        "equipment": db.query(Equipment).filter(Equipment.id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "sites": db.query(Site).filter(Site.id.in_(DEMO_SITE_IDS)).count(),
+        "operators": db.query(Operator).filter(Operator.id.in_(DEMO_OPERATOR_IDS)).count(),
+        "rentals": db.query(Rental).filter(Rental.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "telemetry": db.query(Telemetry).filter(Telemetry.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "alerts": db.query(Alert).filter(Alert.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "recommendations": db.query(Recommendation).filter(Recommendation.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "actions": db.query(Action).filter(Action.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "impact_records": db.query(ImpactRecord).filter(ImpactRecord.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+        "forecasts": db.query(Forecast).filter(Forecast.site_id.in_(DEMO_SITE_IDS)).count(),
+        "audit_events": db.query(AuditEvent).filter(AuditEvent.equipment_id.in_(DEMO_EQUIPMENT_IDS)).count(),
+    }
+    owner = db.get(Equipment, "EQX1001")
+    fingerprint = (owner.metadata_json or {}).get("demo_fingerprint") if owner else None
+    provenance_matches = bool(fingerprint) and fingerprint == demo_fingerprint(db)
+    return {"counts": counts, "blockers": blockers, "provenance_matches": provenance_matches,
+            "safe_to_execute": blockers == 0 and provenance_matches}
+
+
+def refresh_demo_data(db: Session, confirmation: str | None = None, anchor_time: datetime | None = None) -> dict:
+    """Selectively replace the known demo namespace; users and unrelated domain rows survive."""
+    if confirmation is not None and confirmation != DEMO_REFRESH_CONFIRMATION:
+        raise ValueError(f"Confirmation must exactly match: {DEMO_REFRESH_CONFIRMATION}")
+    if confirmation is not None:
+        # Prevent writes between the ownership check and replacement; dry-run never locks.
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SET LOCAL lock_timeout = '5s'"))
+            db.execute(text("LOCK TABLE equipment, sites, operators, rentals, telemetry, alerts, recommendations, actions, impact_records, forecasts, audit_events IN SHARE ROW EXCLUSIVE MODE"))
+        elif db.get_bind().dialect.name == "sqlite":
+            db.execute(text("BEGIN IMMEDIATE"))
+    preview = demo_refresh_preview(db)
+    if confirmation is None:
+        return preview
+    if not preview["safe_to_execute"]:
+        db.rollback()
+        raise RuntimeError("Refresh aborted: unproven/changed demo ownership or external references; review a backup branch")
+    try:
+        db.query(ImpactRecord).filter(ImpactRecord.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Action).filter(Action.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(AuditEvent).filter(AuditEvent.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Recommendation).filter(Recommendation.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Alert).filter(Alert.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Telemetry).filter(Telemetry.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Rental).filter(Rental.equipment_id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Forecast).filter(Forecast.site_id.in_(DEMO_SITE_IDS)).delete(synchronize_session=False)
+        db.query(Equipment).filter(Equipment.id.in_(DEMO_EQUIPMENT_IDS)).delete(synchronize_session=False)
+        db.query(Operator).filter(Operator.id.in_(DEMO_OPERATOR_IDS)).delete(synchronize_session=False)
+        db.query(Site).filter(Site.id.in_(DEMO_SITE_IDS)).delete(synchronize_session=False)
+        db.flush()
+        db.expire_all()
+        seed_database(db, anchor_time=anchor_time, allow_existing=True, commit=False)
+        result = demo_refresh_preview(db)
+        if not result["safe_to_execute"]:
+            raise RuntimeError("Refreshed dataset failed ownership verification")
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
 
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Initialize an empty demo database; existing data is preserved by default.")
-    parser.add_argument("--reset", action="store_true", help="Explicitly erase domain data in a DISPOSABLE demo database")
+    parser = argparse.ArgumentParser(description="Initialize or selectively refresh RentSense demo data.")
+    parser.add_argument("--refresh-demo", action="store_true", help="Preview a selective demo-data refresh")
+    parser.add_argument("--execute", action="store_true", help="Execute --refresh-demo after exact confirmation")
+    parser.add_argument("--confirm", help=f"Required with --execute: {DEMO_REFRESH_CONFIRMATION}")
     args = parser.parse_args()
+    if args.execute and (not args.refresh_demo or args.confirm != DEMO_REFRESH_CONFIRMATION):
+        parser.error("--execute requires --refresh-demo and the exact --confirm phrase")
     db = SessionLocal()
     try:
-        seed_database(db, reset=args.reset)
+        if args.refresh_demo:
+            print(refresh_demo_data(db, args.confirm if args.execute else None))
+        else:
+            seed_database(db)
     finally:
         db.close()

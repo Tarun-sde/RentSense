@@ -15,6 +15,7 @@ def sync_equipment_alerts(
     equipment_id: str,
     anomalies: List[AnomalyResult],
     now: Optional[datetime] = None,
+    commit: bool = True,
 ) -> List[Alert]:
     """
     Synchronize detected anomalies with the alerts table using deterministic deduplication.
@@ -90,37 +91,44 @@ def sync_equipment_alerts(
             open_alert.status = "RESOLVED"
             open_alert.resolved_at = current_time
 
+    if not commit:
+        db.flush()
+        db.info.setdefault("pending_alert_notifications", []).extend(newly_created_alerts)
+        return synced_alerts
+
     db.commit()
     for alert in synced_alerts:
         db.refresh(alert)
 
     # 4. Dispatch email notification for genuinely NEW alerts after successful DB commit
-    if newly_created_alerts:
-        try:
-            equipment = db.query(Equipment).filter(Equipment.id == equipment_id).first()
-            eq_type = equipment.type if equipment else None
-            dealer = equipment.dealer if equipment else None
-            rental = get_current_rental(equipment) if equipment else None
-            site_name = rental.site.name if (rental and rental.site) else None
-            operator_name = rental.operator.name if (rental and rental.operator) else None
-
-            for alert_obj, anomaly_obj in newly_created_alerts:
-                send_alert_email(
-                    alert_type=alert_obj.alert_type,
-                    severity=alert_obj.severity,
-                    message=alert_obj.message,
-                    equipment_id=equipment_id,
-                    equipment_type=eq_type,
-                    dealer=dealer,
-                    site_name=site_name,
-                    operator_name=operator_name,
-                    anomaly_score=anomaly_obj.anomaly_score if anomaly_obj else None,
-                    recommended_action=anomaly_obj.recommended_action_category if anomaly_obj else None,
-                    metadata=alert_obj.metadata_json,
-                    timestamp=alert_obj.created_at,
-                )
-        except Exception as notify_err:
-            # Best-effort notification: failure to notify must never break the alert sync
-            logger.warning(f"[NOTIFICATION] Non-fatal notification error during alert sync for {equipment_id}: {notify_err}")
+    _dispatch_alert_notifications(db, newly_created_alerts)
 
     return synced_alerts
+
+
+def dispatch_pending_alert_notifications(db: Session) -> None:
+    """Send notifications queued by a successfully committed simulator batch."""
+    _dispatch_alert_notifications(db, db.info.pop("pending_alert_notifications", []))
+
+
+def _dispatch_alert_notifications(db: Session, pending) -> None:
+    for alert, anomaly in pending:
+        try:
+            equipment = db.query(Equipment).filter(Equipment.id == alert.equipment_id).first()
+            rental = get_current_rental(equipment) if equipment else None
+            send_alert_email(
+                alert_type=alert.alert_type,
+                severity=alert.severity,
+                message=alert.message,
+                equipment_id=alert.equipment_id,
+                equipment_type=equipment.type if equipment else None,
+                dealer=equipment.dealer if equipment else None,
+                site_name=rental.site.name if rental and rental.site else None,
+                operator_name=rental.operator.name if rental and rental.operator else None,
+                anomaly_score=anomaly.anomaly_score,
+                recommended_action=anomaly.recommended_action_category,
+                metadata=alert.metadata_json,
+                timestamp=alert.created_at,
+            )
+        except Exception as notify_err:
+            logger.warning("[NOTIFICATION] Non-fatal deferred notification error for %s: %s", alert.equipment_id, notify_err)

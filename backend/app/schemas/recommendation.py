@@ -25,5 +25,5 @@ class RecommendationResponse(RecommendationBase):
 class RecommendationActionRequest(BaseModel):
     action_type: Optional[str] = None
     notes: Optional[str] = None
-    actor: Optional[str] = "Marcus Vance"
+    actor: Optional[str] = "Fleet Operator"
     payload: Optional[Dict[str, Any]] = None

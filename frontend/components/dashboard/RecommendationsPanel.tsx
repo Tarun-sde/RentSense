@@ -31,7 +31,7 @@ export function RecommendationsPanel({
       await triggerActionFromRecommendation(rec.id, {
         action_type: rec.recommendation_type,
         notes: `Initiated from Control Tower Dashboard: ${rec.action}`,
-        actor: "Commander Marcus Vance",
+        actor: "Fleet Operator",
         payload: rec.estimated_impact || {},
       });
       if (onActionTriggered) {

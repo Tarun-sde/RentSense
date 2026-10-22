@@ -14,13 +14,13 @@ def setup_module():
         db.close()
 
 
-def test_list_equipment_returns_7_assets():
+def test_list_equipment_returns_demo_assets():
     response = client.get("/api/v1/equipment")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 7
+    assert len(data) == 20
     ids = {item["id"] for item in data}
-    expected_ids = {"EQX1001", "EQX1002", "EQX1003", "EQX1004", "EQX1005", "EQX1006", "EQX1007"}
+    expected_ids = {f"EQX{number}" for number in range(1001, 1021)}
     assert ids == expected_ids
 
 
@@ -50,8 +50,8 @@ def test_list_equipment_type_filter():
     response = client.get("/api/v1/equipment?type=Bulldozer")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 2
-    assert {item["id"] for item in data} == {"EQX1002", "EQX1005"}
+    assert len(data) == 3
+    assert {item["id"] for item in data} == {"EQX1002", "EQX1005", "EQX1015"}
 
 
 def test_list_equipment_site_filter():

@@ -80,7 +80,7 @@ def create_operational_action(
             alert_id=req.alert_id,
             priority=req.priority or "MEDIUM",
             notes=req.notes,
-            actor=req.actor or "Marcus Vance",
+            actor=req.actor or "Fleet Operator",
             payload=req.payload,
         )
         return action
@@ -101,7 +101,7 @@ def complete_operational_action(
         action = complete_action(
             db=db,
             action_id=action_id,
-            actor=req.actor or "Marcus Vance",
+            actor=req.actor or "Fleet Operator",
             notes=req.notes,
             payload=req.payload,
         )
@@ -123,7 +123,7 @@ def cancel_operational_action(
         action = cancel_action(
             db=db,
             action_id=action_id,
-            actor=req.actor or "Marcus Vance",
+            actor=req.actor or "Fleet Operator",
             reason=req.reason or "Cancelled by operator",
         )
         return action
@@ -144,7 +144,7 @@ def resolve_fleet_alert(
         alert = resolve_alert(
             db=db,
             alert_id=alert_id,
-            actor=req.actor or "Marcus Vance",
+            actor=req.actor or "Fleet Operator",
             resolution_notes=req.resolution_notes or "Manually resolved",
         )
         return alert

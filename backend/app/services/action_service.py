@@ -19,7 +19,7 @@ def create_action(
     alert_id: Optional[int] = None,
     priority: str = "MEDIUM",
     notes: Optional[str] = None,
-    actor: str = "Marcus Vance",
+    actor: str = "Fleet Operator",
     payload: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
 ) -> Action:
@@ -80,7 +80,7 @@ def create_action(
 def complete_action(
     db: Session,
     action_id: int,
-    actor: str = "Marcus Vance",
+    actor: str = "Fleet Operator",
     notes: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
@@ -229,7 +229,7 @@ def complete_action(
 def cancel_action(
     db: Session,
     action_id: int,
-    actor: str = "Marcus Vance",
+    actor: str = "Fleet Operator",
     reason: Optional[str] = "Cancelled by operator",
     now: Optional[datetime] = None,
 ) -> Action:
@@ -269,7 +269,7 @@ def cancel_action(
 def resolve_alert(
     db: Session,
     alert_id: int,
-    actor: str = "Marcus Vance",
+    actor: str = "Fleet Operator",
     resolution_notes: Optional[str] = "Manually resolved by operator",
     now: Optional[datetime] = None,
 ) -> Alert:
@@ -299,4 +299,3 @@ def resolve_alert(
     db.commit()
     db.refresh(alert)
     return alert
-

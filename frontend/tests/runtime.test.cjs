@@ -8,8 +8,39 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
   fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
 ).outputText, filename);
 const { createQueryClient, apiQuery } = require('../lib/query-client.ts');
-const { connectTelemetry } = require('../lib/telemetry-connection.ts');
+const { connectTelemetry, FRESHNESS_MS, EXPECTED_TELEMETRY_INTERVAL_MS } = require('../lib/telemetry-connection.ts');
 const { applyTelemetry } = require('../lib/telemetry-cache.ts');
+const { greetingForHour, millisecondsUntilNextGreeting } = require('../lib/greeting.ts');
+const { validCoordinate, equipmentCoordinate, equipmentSites, coordinateExtent } = require('../lib/map-data.ts');
+
+test('telemetry freshness allows more than two expected simulator intervals', () => {
+  assert.equal(EXPECTED_TELEMETRY_INTERVAL_MS, 60_000);
+  assert.equal(FRESHNESS_MS, 150_000);
+});
+
+test('browser-local greeting covers every boundary and midnight', () => {
+  assert.equal(greetingForHour(0), 'Good Night');
+  assert.equal(greetingForHour(4), 'Good Night');
+  assert.equal(greetingForHour(5), 'Good Morning');
+  assert.equal(greetingForHour(11), 'Good Morning');
+  assert.equal(greetingForHour(12), 'Good Afternoon');
+  assert.equal(greetingForHour(16), 'Good Afternoon');
+  assert.equal(greetingForHour(17), 'Good Evening');
+  assert.equal(greetingForHour(20), 'Good Evening');
+  assert.equal(greetingForHour(21), 'Good Night');
+  assert.equal(millisecondsUntilNextGreeting(new Date(2026, 0, 1, 23, 59, 59)), 5 * 60 * 60 * 1000 + 1000);
+});
+
+test('map data rejects invalid GPS, prefers telemetry, derives sites and bounds', () => {
+  const site = { id: 'site', name: 'Site', latitude: 18.5, longitude: 73.5, created_at: '' };
+  const asset = { id: 'asset', status: 'ACTIVE', site, latest_telemetry: { latitude: 19, longitude: 74 } };
+  assert.deepEqual(validCoordinate(91, 74), null);
+  assert.deepEqual(validCoordinate(19, -181), null);
+  assert.deepEqual(equipmentCoordinate(asset), { latitude: 19, longitude: 74 });
+  assert.deepEqual(equipmentCoordinate({ ...asset, latest_telemetry: { latitude: NaN, longitude: 74 } }), { latitude: 18.5, longitude: 73.5 });
+  assert.deepEqual(equipmentSites([asset, { ...asset, id: 'asset-2' }]).map(item => item.id), ['site']);
+  assert.deepEqual(coordinateExtent([{ latitude: 10, longitude: 80 }, { latitude: 20, longitude: 70 }]), { minLatitude: 10, maxLatitude: 20, minLongitude: 70, maxLongitude: 80 });
+});
 
 test('successful equipment creation invalidates operational but not reference data', async () => {
   const originalFetch = global.fetch;

@@ -19,7 +19,7 @@ def test_dashboard_kpis():
     assert response.status_code == 200
     data = response.json()
 
-    assert data["total_equipment"] == 7
+    assert data["total_equipment"] == 20
     assert data["active"] >= 1
     assert data["idle"] >= 1
     assert data["due_soon"] >= 1
@@ -34,8 +34,8 @@ def test_dashboard_kpis():
         + data["overdue"]
         + data["unassigned"]
     )
-    assert total_status == 7
+    assert total_status == 20
 
     assert "status_counts" in data
-    assert data["open_alerts"] == 6
+    assert data["open_alerts"] == 11
     assert data["fleet_utilization_pct"] > 0

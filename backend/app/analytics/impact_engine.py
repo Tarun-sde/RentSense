@@ -62,6 +62,7 @@ def record_realized_action_savings(
     rental: Optional[Rental] = None,
     payload: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
+    commit: bool = True,
 ) -> ImpactRecord:
     """
     Record verified realized financial savings when an operational action transitions to COMPLETED.
@@ -123,8 +124,11 @@ def record_realized_action_savings(
             "completed_at": current_time.isoformat(),
             "target_site_id": site_id,
         }
-        db.commit()
-        db.refresh(existing)
+        if commit:
+            db.commit()
+            db.refresh(existing)
+        else:
+            db.flush()
         return existing
 
     impact_rec = ImpactRecord(
@@ -149,8 +153,11 @@ def record_realized_action_savings(
         calculated_at=current_time,
     )
     db.add(impact_rec)
-    db.commit()
-    db.refresh(impact_rec)
+    if commit:
+        db.commit()
+        db.refresh(impact_rec)
+    else:
+        db.flush()
     return impact_rec
 
 

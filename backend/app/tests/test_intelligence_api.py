@@ -92,7 +92,8 @@ def test_get_forecasts_endpoint():
     assert "confidence" in first
     assert "explanation" in first
     assert "drivers" in first
-    assert first["predicted_units"] > 0
+    assert first["predicted_units"] >= 0
+    assert any(row["predicted_units"] > 0 for row in data)
     assert 0.0 < first["confidence"] <= 1.0
 
 

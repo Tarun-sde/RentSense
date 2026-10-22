@@ -118,7 +118,10 @@ cp .env.example .env
 | `FRONTEND_URL` | URL of the frontend for CORS whitelisting | `http://localhost:3000` |
 | `CORS_ORIGINS` | Comma-separated CORS allowed origins | `http://localhost:3000,http://127.0.0.1:3000` |
 | `NEXT_PUBLIC_API_URL` | Base API URL for Next.js client | `http://localhost:8000` |
-| `SIMULATOR_INTERVAL_SECONDS` | Telemetry packet interval | `5` |
+| `TELEMETRY_SIMULATOR_ENABLED` | Enable the in-process demo simulator | `false` |
+| `SIMULATOR_INTERVAL_SECONDS` | Active-viewer telemetry interval (10–3600 seconds) | `60` |
+| `SIMULATOR_ACTIVE_VIEWERS_ONLY` | Suspend writes without SSE viewers | `true` |
+| `SIMULATOR_IDLE_GRACE_SECONDS` | Continue briefly after the last viewer leaves | `60` |
 | `ALERT_DUE_SOON_HOURS` | Lead hours for due soon notification | `48` |
 | `IDLE_HOURS_THRESHOLD` | Max acceptable idle runtime before anomaly | `8.0` |
 | `LOW_UTILIZATION_THRESHOLD` | Minimum acceptable utilization fraction | `0.20` |
@@ -138,6 +141,7 @@ cd backend
 Seeding now only initializes an empty database and uses dates relative to today. Existing data is preserved. Docker startup does not seed unless you explicitly set `SEED_DEMO_DATA=true` for a fresh demo database; set it back to `false` afterward. Never use the seeder’s `--reset` option against Neon or data you want to keep. Configure `ADMIN_PASSWORD` rather than relying on a default login.
 
 Production HTTPS cookies default to Secure; local HTTP Compose defaults `AUTH_COOKIE_SECURE=false`. Keep it `true` on Azure. See [performance results, verification and deployment instructions](docs/PERFORMANCE_OPTIMIZATION_REPORT.md).
+The old standalone simulator container has been replaced by the backend lifespan task; see [the simulator runbook](docs/IN_PROCESS_TELEMETRY_SIMULATOR.md).
 
 Populates 7 representative heavy assets, 3 jobsites, 4 certified operators, active rentals, historical telemetry, and baseline forecasts:
 ```bash

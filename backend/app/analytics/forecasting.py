@@ -2,19 +2,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from app.models import Forecast, Rental, Equipment, Site
-
-# Supported equipment categories in RentSense fleet
-EQUIPMENT_TYPES = [
-    "Excavator",
-    "Bulldozer",
-    "Wheel Loader",
-    "Generator",
-    "Scissor Lift",
-    "Boom Lift",
-]
 
 # Weights for 3-week Weighted Moving Average (WMA)
 WMA_WEIGHTS = [0.5, 0.3, 0.2]
@@ -158,35 +147,29 @@ def get_historical_demand_matrix(db: Session, now: Optional[datetime] = None) ->
     Extract or construct weekly demand history matrix:
     matrix[site_id][equipment_type] = [week_t-1, week_t-2, week_t-3, week_t-4, ...]
     """
-    # Deterministic challenge historical series for the 3 challenge sites
-    challenge_history: Dict[str, Dict[str, List[float]]] = {
-        "SITE-001": {  # Metro Tunnel Extension
-            "Excavator": [2.0, 2.0, 1.0, 1.0, 2.0, 2.0],
-            "Bulldozer": [1.0, 1.0, 1.0, 0.0, 1.0, 1.0],
-            "Wheel Loader": [2.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-            "Generator": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-            "Scissor Lift": [1.0, 0.0, 1.0, 1.0, 0.0, 1.0],
-            "Boom Lift": [1.0, 1.0, 0.0, 1.0, 1.0, 1.0],
-        },
-        "SITE-002": {  # Northside Logistics Hub
-            "Excavator": [1.0, 1.0, 0.0, 1.0, 1.0, 1.0],
-            "Bulldozer": [3.0, 2.0, 2.0, 2.0, 1.0, 1.0],
-            "Wheel Loader": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-            "Generator": [2.0, 2.0, 1.0, 1.0, 1.0, 1.0],
-            "Scissor Lift": [1.0, 1.0, 1.0, 0.0, 1.0, 1.0],
-            "Boom Lift": [2.0, 2.0, 1.0, 1.0, 1.0, 1.0],
-        },
-        "SITE-003": {  # Highland Medical Center
-            "Excavator": [0.0, 1.0, 1.0, 0.0, 1.0, 1.0],
-            "Bulldozer": [1.0, 0.0, 1.0, 1.0, 1.0, 0.0],
-            "Wheel Loader": [1.0, 1.0, 0.0, 1.0, 1.0, 1.0],
-            "Generator": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-            "Scissor Lift": [2.0, 2.0, 2.0, 1.0, 2.0, 1.0],
-            "Boom Lift": [1.0, 1.0, 1.0, 1.0, 0.0, 1.0],
-        },
-    }
-    return challenge_history
-
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    rows = db.query(Rental.site_id, Equipment.type, Rental.equipment_id,
+                    Rental.checked_out_at, Rental.checked_in_at).join(
+        Equipment, Rental.equipment_id == Equipment.id).filter(
+        Rental.checked_out_at < current,
+        (Rental.checked_in_at.is_(None)) | (Rental.checked_in_at > current - timedelta(weeks=6)),
+    ).all()
+    matrix = {}
+    for site_id, equipment_type, equipment_id, started, ended in rows:
+        if not site_id or not started:
+            continue
+        started = started.replace(tzinfo=timezone.utc) if started.tzinfo is None else started
+        ended = ended.replace(tzinfo=timezone.utc) if ended and ended.tzinfo is None else ended
+        weeks = matrix.setdefault(site_id, {}).setdefault(equipment_type, [set() for _ in range(6)])
+        for index, assets in enumerate(weeks):
+            right = current - timedelta(weeks=index)
+            left = right - timedelta(weeks=1)
+            if started < right and (ended is None or ended > left):
+                assets.add(equipment_id)
+    return {site: {kind: [float(len(assets)) for assets in weeks]
+                   for kind, weeks in kinds.items()} for site, kinds in matrix.items()}
 
 def generate_demand_forecasts(
     db: Session,
@@ -210,31 +193,32 @@ def generate_demand_forecasts(
     forecast_results: List[ForecastRecord] = []
 
     target_sites = [s for s in sites if site_id is None or s.id == site_id]
-    target_types = [t for t in EQUIPMENT_TYPES if equipment_type is None or t == equipment_type]
+    types = sorted({row[0] for row in db.query(Equipment.type).distinct()})
+    target_types = [t for t in types if equipment_type is None or t == equipment_type]
 
     for site in target_sites:
         site_hist = historical_matrix.get(site.id, {})
 
         for eq_type in target_types:
-            history = site_hist.get(eq_type, [1.0, 1.0, 1.0])
+            history = site_hist.get(eq_type, [0.0] * 6)
+            mae = calculate_backtest_mae(history)
+            confidence, adequacy = calculate_deterministic_confidence(history, mae)
             
             # Predict for next horizon_weeks
             sim_history = list(history)
             for w in range(1, horizon_weeks + 1):
                 forecast_date = current_time + timedelta(weeks=w)
                 predicted = calculate_weighted_moving_average(sim_history)
-                mae = calculate_backtest_mae(sim_history)
-                confidence, adequacy = calculate_deterministic_confidence(sim_history, mae)
 
                 drivers = {
-                    "historical_weeks": len(sim_history),
+                    "historical_weeks": len(history),
                     "wma_weights": WMA_WEIGHTS,
-                    "recent_actuals": sim_history[:3],
+                    "recent_actuals": history[:3],
                     "data_adequacy": adequacy,
-                    "site_work_phase": "Open-Cast Ore Extraction" if site.id == "SITE-001" else "Airside Earthworks & Staging" if site.id == "SITE-002" else "Turbine Erection & Infrastructure",
+                    "site_work_phase": "Recorded rental demand",
                 }
 
-                driver_text = f"sustained {drivers['site_work_phase'].lower()} activities"
+                driver_text = "weekly distinct equipment rentals recorded at this site"
                 explanation = generate_site_forecast_explanation(
                     site_name=site.name,
                     equipment_type=eq_type,
@@ -265,7 +249,7 @@ def generate_demand_forecasts(
     return forecast_results
 
 
-def sync_forecasts_to_db(db: Session, forecasts: List[ForecastRecord]) -> None:
+def sync_forecasts_to_db(db: Session, forecasts: List[ForecastRecord], *, commit: bool = True) -> None:
     """
     Persist generated forecast records into the forecasts table.
     """
@@ -298,4 +282,7 @@ def sync_forecasts_to_db(db: Session, forecasts: List[ForecastRecord]) -> None:
             )
             db.add(db_forecast)
 
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()

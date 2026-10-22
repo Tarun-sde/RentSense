@@ -14,17 +14,20 @@ class ConnectionManager:
 
     def __init__(self):
         self._subscribers: Set[asyncio.Queue] = set()
+        self._activity_changed = asyncio.Event()
 
     async def connect(self) -> asyncio.Queue:
         """Register a new client subscriber queue."""
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         self._subscribers.add(queue)
+        self._activity_changed.set()
         logger.info(f"SSE client connected. Active subscribers: {len(self._subscribers)}")
         return queue
 
     def disconnect(self, queue: asyncio.Queue) -> None:
         """Unregister a client subscriber queue."""
         self._subscribers.discard(queue)
+        self._activity_changed.set()
         logger.info(f"SSE client disconnected. Active subscribers: {len(self._subscribers)}")
 
     async def broadcast(self, event_type: str, data: dict) -> None:
@@ -58,6 +61,14 @@ class ConnectionManager:
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
+    async def wait_for_activity_change(self, timeout: float | None = None) -> None:
+        """Wait until a viewer connects/disconnects, or until the caller's deadline."""
+        self._activity_changed.clear()
+        try:
+            await asyncio.wait_for(self._activity_changed.wait(), timeout)
+        except asyncio.TimeoutError:
+            pass
 
 
 # Global singleton instance

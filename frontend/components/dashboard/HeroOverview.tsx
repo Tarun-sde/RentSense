@@ -1,7 +1,10 @@
-import React from "react";
+"use client";
+
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, QrCode } from "lucide-react";
 import { GlassCard } from "../ui/GlassCard";
+import { greetingForHour, millisecondsUntilNextGreeting } from "@/lib/greeting";
 
 interface HeroOverviewProps {
   fleetUtilizationPct?: number;
@@ -14,6 +17,29 @@ export function HeroOverview({
   totalAssets,
   activeAssets,
 }: HeroOverviewProps) {
+  const [greeting, setGreeting] = useState("Welcome");
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const update = () => {
+      if (timer) clearTimeout(timer);
+      const now = new Date();
+      setGreeting(greetingForHour(now.getHours()));
+      timer = setTimeout(update, millisecondsUntilNextGreeting(now));
+    };
+    const handleVisibility = () => {
+      if (!document.hidden) update();
+    };
+    update();
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", update);
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", update);
+    };
+  }, []);
+
   return (
     <section className="relative w-full mb-10">
       <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-8 items-stretch">
@@ -29,7 +55,7 @@ export function HeroOverview({
               className="text-4xl sm:text-5xl lg:text-6xl font-medium leading-[1.02] tracking-tight text-black"
               style={{ fontFamily: "var(--font-playfair), Georgia, serif" }}
             >
-              Good Morning,{" "}
+              {greeting},{" "}
               <span className="italic text-[#ff5a24] block sm:inline">
                 Operator.
               </span>
@@ -86,27 +112,11 @@ export function HeroOverview({
             </div>
           </div>
 
-          {/* Interactive sparkline visual */}
-          <div className="my-6 h-14 w-full">
-            <svg viewBox="0 0 280 50" className="h-full w-full overflow-visible" fill="none">
-              <path
-                d="M0 40 L25 35 L50 42 L80 20 L110 32 L140 18 L170 28 L200 12 L230 22 L255 10 L280 14"
-                stroke="#ff5a24"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-              />
-              <path
-                d="M0 40 L25 35 L50 42 L80 20 L110 32 L140 18 L170 28 L200 12 L230 22 L255 10 L280 14 L280 50 L0 50 Z"
-                fill="url(#signalGrad)"
-                opacity="0.15"
-              />
-              <defs>
-                <linearGradient id="signalGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#ff5a24" />
-                  <stop offset="100%" stopColor="#ff5a24" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-            </svg>
+          <div className="my-6 h-14 w-full flex items-center">
+            <div className="h-3 w-full rounded-full bg-black/10" role="meter" aria-label="Fleet utilization"
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={fleetUtilizationPct}>
+              <div className="h-3 rounded-full bg-[#ff5a24]" style={{ width: `${Math.max(0, Math.min(100, fleetUtilizationPct ?? 0))}%` }} />
+            </div>
           </div>
 
           {/* Quick Metrics Bar */}
@@ -118,7 +128,7 @@ export function HeroOverview({
             <div>
               <span className="text-[#7a7a7a] font-normal block">Active vs Surveillance</span>
               <span className="font-semibold text-black text-base mt-0.5 block">
-                {activeAssets ?? "—"} / {totalAssets} Units Online
+                {activeAssets ?? "—"} / {totalAssets ?? "—"} Assets Active
               </span>
             </div>
           </div>

@@ -54,6 +54,10 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       GEMINI_MAX_TURNS: ${GEMINI_MAX_TURNS:-6}
+      TELEMETRY_SIMULATOR_ENABLED: ${TELEMETRY_SIMULATOR_ENABLED:-false}
+      SIMULATOR_INTERVAL_SECONDS: ${SIMULATOR_INTERVAL_SECONDS:-60}
+      SIMULATOR_ACTIVE_VIEWERS_ONLY: ${SIMULATOR_ACTIVE_VIEWERS_ONLY:-true}
+      SIMULATOR_IDLE_GRACE_SECONDS: ${SIMULATOR_IDLE_GRACE_SECONDS:-60}
     expose:
       - "8000"
     healthcheck:
@@ -71,6 +75,7 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost}
         NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
+        NEXT_PUBLIC_SIMULATOR_INTERVAL_SECONDS: ${SIMULATOR_INTERVAL_SECONDS:-60}
     container_name: rentsense-frontend
     restart: unless-stopped
     env_file:
@@ -88,24 +93,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
-    networks:
-      - rentsense
-
-  simulator:
-    build:
-      context: ./simulator
-      dockerfile: Dockerfile
-    container_name: rentsense-simulator
-    profiles: ["simulation"]
-    restart: unless-stopped
-    env_file:
-      - .env
-    depends_on:
-      backend:
-        condition: service_healthy
-    environment:
-      API_BASE_URL: ${SIMULATOR_API_BASE_URL:-http://backend:8000}
-      SIMULATOR_INTERVAL_SECONDS: ${SIMULATOR_INTERVAL_SECONDS:-5}
     networks:
       - rentsense
 

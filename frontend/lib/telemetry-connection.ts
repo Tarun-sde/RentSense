@@ -1,7 +1,8 @@
 import type { TelemetryStreamEvent } from "../types";
 import type { ConnectionState } from "./useTelemetryStream";
 
-export const FRESHNESS_MS = 30_000;
+export const EXPECTED_TELEMETRY_INTERVAL_MS = Math.max(10, Number(process.env.NEXT_PUBLIC_SIMULATOR_INTERVAL_SECONDS) || 60) * 1000;
+export const FRESHNESS_MS = Math.max(30_000, EXPECTED_TELEMETRY_INTERVAL_MS * 2.5);
 export const POLL_MS = 30_000;
 
 export function connectTelemetry(options: {

@@ -1,394 +1,199 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import mapboxgl from "mapbox-gl";
 import { Navigation } from "lucide-react";
 import { GlassCard } from "../ui/GlassCard";
-import { SITE_COORDINATES, STATUS_CONFIG } from "@/lib/constants";
-import { EquipmentListItem, EquipmentStatus } from "@/types";
+import { STATUS_CONFIG } from "@/lib/constants";
+import { coordinateExtent, equipmentCoordinate, equipmentSites, validCoordinate } from "@/lib/map-data";
+import type { EquipmentListItem, EquipmentStatus } from "@/types";
 import { cn } from "@/lib/utils";
 
-interface FleetMapCardProps {
-  equipmentList: EquipmentListItem[];
+interface FleetMapCardProps { equipmentList: EquipmentListItem[] }
+type MarkerItem = { marker: mapboxgl.Marker; popup: mapboxgl.Popup; element: HTMLElement };
+
+function statusFor(asset: EquipmentListItem): EquipmentStatus {
+  return asset.status in STATUS_CONFIG ? asset.status as EquipmentStatus : "UNASSIGNED";
+}
+
+function appendText(parent: HTMLElement, text: string, className?: string) {
+  const element = document.createElement("div");
+  if (className) element.className = className;
+  element.textContent = text;
+  parent.appendChild(element);
+}
+
+function markerElement(asset: EquipmentListItem, color: string) {
+  const element = document.createElement("button");
+  element.type = "button";
+  element.className = "relative flex cursor-pointer items-center justify-center";
+  element.setAttribute("aria-label", `Open ${asset.id}`);
+  const pulse = document.createElement("span");
+  pulse.className = "absolute size-[22px] animate-ping rounded-full opacity-25";
+  pulse.style.backgroundColor = color;
+  const dot = document.createElement("span");
+  dot.className = "size-3 rounded-full border-2 border-white shadow-md";
+  dot.style.backgroundColor = color;
+  const label = document.createElement("span");
+  label.className = "absolute top-4 whitespace-nowrap rounded border border-white/20 bg-black px-1 text-[8px] font-bold text-white";
+  label.textContent = asset.id;
+  element.append(pulse, dot, label);
+  return element;
+}
+
+function popupContent(asset: EquipmentListItem, coordinate: { latitude: number; longitude: number }, status: EquipmentStatus) {
+  const root = document.createElement("div");
+  root.className = "min-w-36 text-xs leading-5 text-white";
+  appendText(root, `${asset.id} · ${asset.type}`, "font-bold text-[#ff5a24]");
+  appendText(root, `Status: ${STATUS_CONFIG[status].label}`);
+  appendText(root, `Site: ${asset.site?.name || "Depot / unassigned"}`);
+  appendText(root, `GPS: ${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)}`, "font-mono text-white/70");
+  return root;
 }
 
 export function FleetMapCard({ equipmentList }: FleetMapCardProps) {
   const router = useRouter();
-  const [selectedSiteId, setSelectedSiteId] = useState<string>("ALL");
-  const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-  const hasMapboxToken = Boolean(mapboxToken?.trim());
-  const [mapboxError, setMapboxError] = useState<boolean>(false);
-  const [isMapReady, setIsMapReady] = useState<boolean>(false);
-
+  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim();
+  const [selectedSiteId, setSelectedSiteId] = useState("ALL");
+  const [mapState, setMapState] = useState<"loading" | "ready" | "error">(token ? "loading" : "error");
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
-  const markersRef = useRef<Map<string, { marker: mapboxgl.Marker; element: HTMLElement; popup: mapboxgl.Popup }>>(new Map());
+  const markersRef = useRef<Map<string, MarkerItem>>(new Map());
+  const lastBoundsKey = useRef("");
+  const sites = useMemo(() => equipmentSites(equipmentList), [equipmentList]);
+  const filteredAssets = useMemo(() => selectedSiteId === "ALL" ? equipmentList : equipmentList.filter(asset => asset.site?.id === selectedSiteId), [equipmentList, selectedSiteId]);
+  const locatedAssets = useMemo(() => filteredAssets.flatMap(asset => {
+    const coordinate = equipmentCoordinate(asset);
+    return coordinate ? [{ asset, coordinate }] : [];
+  }), [filteredAssets]);
 
-  const filteredAssets = selectedSiteId === "ALL"
-    ? equipmentList
-    : equipmentList.filter((eq) => eq.site?.id === selectedSiteId);
-
-  // 1. Initialize Mapbox GL Instance
-  useEffect(() => {
-    if (!mapboxToken || mapboxToken.trim() === "") {
-      return;
-    }
-
-    if (!mapContainerRef.current) return;
-
-    try {
-      mapboxgl.accessToken = mapboxToken!;
-
-      const map = new mapboxgl.Map({
-        container: mapContainerRef.current,
-        style: "mapbox://styles/mapbox/dark-v11",
-        center: [77.5, 17.5],
-        zoom: 4.8,
-        attributionControl: false,
-        cooperativeGestures: false,
-      });
-
-      // Track immediately so navigating away before load still releases WebGL resources.
-      mapRef.current = map;
-      map.on("load", () => {
-        setIsMapReady(true);
-      });
-
-      map.on("error", (e) => {
-        console.warn("Mapbox GL runtime warning/error:", e);
-        if (e.error && (e.error.message?.includes("forbidden") || e.error.message?.includes("unauthorized") || e.error.message?.includes("Invalid Token"))) {
-          setMapboxError(true);
-        }
-      });
-    } catch (err) {
-      console.warn("Failed to initialize Mapbox:", err);
-      queueMicrotask(() => setMapboxError(true));
-    }
-
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, [hasMapboxToken, mapboxToken]);
-
-  // 2. Synchronize Live Equipment Markers upon Telemetry Updates (SSE)
-  useEffect(() => {
-    if (!mapRef.current || !isMapReady) return;
-
+  const fitAssets = (assets = locatedAssets) => {
     const map = mapRef.current;
+    if (!map || !assets.length) return;
+    const bounds = new mapboxgl.LngLatBounds();
+    assets.forEach(({ coordinate }) => bounds.extend([coordinate.longitude, coordinate.latitude]));
+    map.fitBounds(bounds, { padding: 55, maxZoom: 14, duration: 700 });
+  };
 
-    filteredAssets.forEach((asset) => {
-      const lat = asset.latest_telemetry?.latitude ?? (asset.site ? asset.site.latitude : 18.7180);
-      const lng = asset.latest_telemetry?.longitude ?? (asset.site ? asset.site.longitude : 81.2580);
-      const status = asset.status || "UNASSIGNED";
-      const normStatus = (STATUS_CONFIG[status as EquipmentStatus] ? status : "UNASSIGNED") as EquipmentStatus;
-      const color = STATUS_CONFIG[normStatus].color;
+  useEffect(() => {
+    if (!token || !mapContainerRef.current) return;
+    const markers = markersRef.current;
+    let loaded = false;
+    let disposed = false;
+    const fail = () => {
+      if (disposed) return;
+      window.clearTimeout(timeout);
+      mapRef.current?.remove();
+      mapRef.current = null;
+      setMapState("error");
+    };
+    const timeout = window.setTimeout(() => { if (!loaded) fail(); }, 12_000);
+    try {
+      mapboxgl.accessToken = token;
+      const map = new mapboxgl.Map({ container: mapContainerRef.current, style: "mapbox://styles/mapbox/dark-v11", center: [78.5, 20.5], zoom: 4, attributionControl: true });
+      mapRef.current = map;
+      map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
+      map.once("load", () => { if (disposed) return; loaded = true; window.clearTimeout(timeout); map.resize(); setMapState("ready"); });
+      map.on("error", () => {
+        fail();
+      });
+    } catch {
+      queueMicrotask(fail);
+    }
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      markers.forEach(item => { item.popup.remove(); item.marker.remove(); });
+      markers.clear();
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+  }, [token]);
 
-      if (markersRef.current.has(asset.id)) {
-        const item = markersRef.current.get(asset.id)!;
-        item.marker.setLngLat([lng, lat]);
-      } else {
-        const el = document.createElement("div");
-        el.className = "cursor-pointer group relative";
-        el.innerHTML = `
-          <div style="position: relative; display: flex; align-items: center; justify-content: center;">
-            <div style="position: absolute; width: 22px; height: 22px; border-radius: 9999px; background: ${color}; opacity: 0.25; animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-            <div style="width: 12px; height: 12px; border-radius: 9999px; background: ${color}; border: 2px solid #ffffff; box-shadow: 0 2px 4px rgba(0,0,0,0.5);"></div>
-            <span style="position: absolute; bottom: -16px; font-size: 8px; font-weight: 700; color: #ffffff; background: #000000; padding: 1px 4px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.2); white-space: nowrap;">
-              ${asset.id}
-            </span>
-          </div>
-        `;
-
-        el.addEventListener("click", () => {
-          router.push(`/assets/${asset.id}`);
-        });
-
-        const popupHtml = `
-          <div style="font-family: sans-serif; padding: 4px; color: #ffffff; min-width: 140px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.15); padding-bottom: 4px; margin-bottom: 6px;">
-              <strong style="color: #ff5a24; font-size: 12px; font-weight: 700;">${asset.id}</strong>
-              <span style="font-size: 10px; color: rgba(255,255,255,0.7); font-weight: 500;">${asset.type}</span>
-            </div>
-            <div style="font-size: 11px; line-height: 1.5; color: #dddddd;">
-              <div><span style="color: rgba(255,255,255,0.6);">Status:</span> <strong style="color: ${color};">${STATUS_CONFIG[normStatus].label}</strong></div>
-              <div><span style="color: rgba(255,255,255,0.6);">Site:</span> ${asset.site?.name || "Depot Yard"}</div>
-              <div><span style="color: rgba(255,255,255,0.6);">GPS:</span> ${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
-            </div>
-          </div>
-        `;
-
-        const popup = new mapboxgl.Popup({
-          offset: 14,
-          className: "rentsense-map-popup",
-          closeButton: false,
-          closeOnClick: false,
-          focusAfterOpen: false,
-        }).setHTML(popupHtml);
-
-        const marker = new mapboxgl.Marker({
-          element: el,
-          anchor: "center",
-        })
-          .setLngLat([lng, lat])
-          .setPopup(popup)
-          .addTo(map);
-
-        markersRef.current.set(asset.id, { marker, element: el, popup });
+  useEffect(() => {
+    if (mapState !== "ready" || !mapRef.current) return;
+    const visibleIds = new Set(locatedAssets.map(({ asset }) => asset.id));
+    for (const [id, item] of markersRef.current) {
+      if (!visibleIds.has(id)) { item.popup.remove(); item.marker.remove(); markersRef.current.delete(id); }
+    }
+    for (const { asset, coordinate } of locatedAssets) {
+      const status = statusFor(asset);
+      const old = markersRef.current.get(asset.id);
+      if (old) {
+        old.marker.setLngLat([coordinate.longitude, coordinate.latitude]);
+        old.popup.setDOMContent(popupContent(asset, coordinate, status));
+        (old.element.children[0] as HTMLElement).style.backgroundColor = STATUS_CONFIG[status].color;
+        (old.element.children[1] as HTMLElement).style.backgroundColor = STATUS_CONFIG[status].color;
+        continue;
       }
-    });
-  }, [filteredAssets, isMapReady, router]);
+      const element = markerElement(asset, STATUS_CONFIG[status].color);
+      element.addEventListener("click", () => router.push(`/assets/${encodeURIComponent(asset.id)}`));
+      const popup = new mapboxgl.Popup({ offset: 16, closeButton: false, focusAfterOpen: false }).setDOMContent(popupContent(asset, coordinate, status));
+      const marker = new mapboxgl.Marker({ element }).setLngLat([coordinate.longitude, coordinate.latitude]).setPopup(popup).addTo(mapRef.current);
+      element.addEventListener("mouseenter", () => popup.setLngLat(marker.getLngLat()).addTo(mapRef.current!));
+      element.addEventListener("mouseleave", () => popup.remove());
+      element.addEventListener("focus", () => popup.setLngLat(marker.getLngLat()).addTo(mapRef.current!));
+      element.addEventListener("blur", () => popup.remove());
+      markersRef.current.set(asset.id, { marker, popup, element });
+    }
+    const boundsKey = selectedSiteId + ":" + [...visibleIds].join(",");
+    if (lastBoundsKey.current !== boundsKey) {
+      fitAssets();
+      lastBoundsKey.current = boundsKey;
+    }
+  // fitAssets is derived from locatedAssets and intentionally not a dependency.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locatedAssets, selectedSiteId, mapState, router]);
 
   const handleSiteSelect = (siteId: string) => {
     setSelectedSiteId(siteId);
-
-    if (mapRef.current) {
-      if (siteId === "ALL") {
-        mapRef.current.flyTo({
-          center: [77.5, 17.5],
-          zoom: 4.8,
-          speed: 1.2,
-          curve: 1.4,
-          essential: true,
-        });
-      } else {
-        const targetSite = SITE_COORDINATES.find((s) => s.id === siteId);
-        if (targetSite) {
-          mapRef.current.flyTo({
-            center: [targetSite.lng, targetSite.lat],
-            zoom: 14.2,
-            speed: 1.2,
-            curve: 1.4,
-            essential: true,
-          });
-        }
-      }
-    }
+    if (siteId === "ALL") return;
+    const site = sites.find(item => item.id === siteId);
+    const coordinate = site && validCoordinate(site.latitude, site.longitude);
+    if (coordinate && mapRef.current) mapRef.current.flyTo({ center: [coordinate.longitude, coordinate.latitude], zoom: 13, essential: true });
   };
 
-  const handleCenterFleet = () => {
-    setSelectedSiteId("ALL");
-    if (mapRef.current) {
-      if (filteredAssets.length > 0) {
-        const bounds = new mapboxgl.LngLatBounds();
-        filteredAssets.forEach((asset) => {
-          const lat = asset.latest_telemetry?.latitude ?? (asset.site ? asset.site.latitude : 18.7180);
-          const lng = asset.latest_telemetry?.longitude ?? (asset.site ? asset.site.longitude : 81.2580);
-          bounds.extend([lng, lat]);
-        });
-        mapRef.current.fitBounds(bounds, { padding: 60, maxZoom: 14 });
-      } else {
-        mapRef.current.flyTo({
-          center: [77.5, 17.5],
-          zoom: 4.8,
-          speed: 1.2,
-        });
-      }
-    }
-  };
+  const extent = coordinateExtent(locatedAssets.map(item => item.coordinate));
+  const project = (latitude: number, longitude: number) => ({
+    left: `${extent && extent.maxLongitude !== extent.minLongitude ? 8 + (longitude - extent.minLongitude) / (extent.maxLongitude - extent.minLongitude) * 84 : 50}%`,
+    top: `${extent && extent.maxLatitude !== extent.minLatitude ? 8 + (extent.maxLatitude - latitude) / (extent.maxLatitude - extent.minLatitude) * 84 : 50}%`,
+  });
+  const fallback = !token || mapState === "error";
 
-  const minLat = 12.0;
-  const maxLat = 21.0;
-  const minLng = 71.0;
-  const maxLng = 83.5;
-
-  const projectCoord = (lat: number, lng: number) => {
-    const x = ((lng - minLng) / (maxLng - minLng)) * 100;
-    const y = (1 - (lat - minLat) / (maxLat - minLat)) * 100;
-    return {
-      left: `${Math.min(92, Math.max(8, x))}%`,
-      top: `${Math.min(88, Math.max(12, y))}%`,
-    };
-  };
-
-  const useFallbackMap = !hasMapboxToken || mapboxError;
-
-  return (
-    <GlassCard variant="light" className="p-7 overflow-hidden relative flex flex-col justify-between">
-      {/* Card Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 z-10">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="size-2 bg-[#ff5a24] shadow-[0_0_0_1px_rgba(255,90,36,0.2)]" />
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-black">
-              Tactical Fleet Map
-            </h3>
-            {useFallbackMap ? (
-              <span className="text-[10px] font-mono text-[#ff5a24] bg-[#ff5a24]/10 border border-[#ff5a24]/20 px-2 py-0.5 rounded-full">
-                Tactical Vector Mode
-              </span>
-            ) : (
-              <span className="text-[10px] font-mono text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
-                <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                Mapbox Geographic Base
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-[#6a6a6a] mt-0.5">
-            Realtime telemetry stream &amp; live GPS coordinates
-          </p>
+  return <GlassCard variant="light" className="relative flex flex-col justify-between overflow-hidden p-7">
+    <div className="z-10 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+      <div>
+        <div className="flex items-center gap-2">
+          <span className="size-2 bg-[#ff5a24]" />
+          <h3 className="text-xs font-semibold uppercase tracking-wider">Tactical Fleet Map</h3>
+          <span className={cn("rounded-full border px-2 py-0.5 font-mono text-[10px]", mapState === "ready" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700" : "border-amber-500/20 bg-amber-500/10 text-amber-700")}>
+            {mapState === "ready" ? "Geographic map ready" : fallback ? "Geographic map unavailable" : "Loading geographic map"}
+          </span>
         </div>
-
-        {/* Site Filter Tabs */}
-        <div className="flex items-center gap-1.5 rounded-xl border border-black/10 bg-white/70 p-1 text-xs shadow-sm">
-          <button
-            onClick={() => handleSiteSelect("ALL")}
-            className={cn(
-              "px-3 py-1 rounded-lg font-medium transition-all",
-              selectedSiteId === "ALL"
-                ? "bg-[#111111] text-white shadow-sm"
-                : "text-[#555] hover:text-black"
-            )}
-          >
-            All Sites ({equipmentList.length})
-          </button>
-          {SITE_COORDINATES.map((site) => (
-            <button
-              key={site.id}
-              onClick={() => handleSiteSelect(site.id)}
-              className={cn(
-                "px-3 py-1 rounded-lg font-medium transition-all hidden md:block",
-                selectedSiteId === site.id
-                  ? "bg-[#111111] text-white shadow-sm"
-                  : "text-[#555] hover:text-black"
-              )}
-            >
-              {site.name.split(" ")[0]}
-            </button>
-          ))}
-        </div>
+        <p className="mt-1 text-xs text-[#6a6a6a]">Latest stored GPS positions; stream state is shown in the top bar.</p>
       </div>
-
-      {/* Centerpiece Map View Area */}
-      <div className="relative my-6 h-80 sm:h-96 w-full rounded-2xl border border-black/15 bg-[#111111] overflow-hidden shadow-inner">
-        {/* 1. Real Geographic Base Layer (Mapbox GL Container) */}
-        {!useFallbackMap ? (
-          <div ref={mapContainerRef} className="absolute inset-0 size-full z-0" />
-        ) : (
-          /* Fallback Tactical Canvas */
-          <div className="absolute inset-0 size-full bg-[#eae7df] z-0 overflow-hidden">
-            {/* Vector Background Map Grid & Radial Scan Rings */}
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(255,255,255,0.7),transparent_70%)] pointer-events-none" />
-            <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(0,0,0,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.05)_1px,transparent_1px)] bg-[size:2rem_2rem] opacity-70 pointer-events-none" />
-
-            {/* Fallback Site Landmarks */}
-            {SITE_COORDINATES.map((site) => {
-              const coords = projectCoord(site.lat, site.lng);
-              return (
-                <div
-                  key={site.id}
-                  style={{ left: coords.left, top: coords.top }}
-                  className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center"
-                >
-                  <div className="size-16 rounded-full border border-black/10 bg-white/30 backdrop-blur-[2px]" />
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-black/70 mt-1 bg-white/80 px-2 py-0.5 rounded shadow-sm border border-black/10">
-                    {site.name}
-                  </span>
-                </div>
-              );
-            })}
-
-            {/* Fallback Pins */}
-            {filteredAssets.map((asset) => {
-              const lat = asset.latest_telemetry?.latitude || (asset.site ? 37.7749 : 37.7610);
-              const lng = asset.latest_telemetry?.longitude || (asset.site ? -122.4194 : -122.4480);
-              const pos = projectCoord(lat, lng);
-              const normStatus = (asset.status.toUpperCase() as EquipmentStatus) in STATUS_CONFIG
-                ? (asset.status.toUpperCase() as EquipmentStatus)
-                : "UNASSIGNED";
-              const color = STATUS_CONFIG[normStatus].color;
-
-              return (
-                <Link
-                  key={asset.id}
-                  href={`/assets/${asset.id}`}
-                  style={{ left: pos.left, top: pos.top }}
-                  className="absolute -translate-x-1/2 -translate-y-1/2 group z-20 transition-all duration-700 ease-out hover:scale-125"
-                >
-                  <div className="relative flex items-center justify-center">
-                    <span
-                      className="size-5 rounded-full shadow-lg border-2 border-white flex items-center justify-center transition-all group-hover:ring-4 group-hover:ring-black/10"
-                      style={{ backgroundColor: color }}
-                    >
-                      <span className="size-1.5 rounded-full bg-white animate-pulse" />
-                    </span>
-
-                    {/* Tooltip Tag */}
-                    <div className="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center whitespace-nowrap rounded-xl bg-[#111111] px-3 py-2 text-xs text-white shadow-2xl border border-white/20 z-30">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-[#ff5a24]">{asset.id}</span>
-                        <span>•</span>
-                        <span>{asset.type}</span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1 text-[10px] text-white/70">
-                        <span>{STATUS_CONFIG[normStatus].label}</span>
-                        <span>|</span>
-                        <span>{asset.site?.name || "Yard Staging"}</span>
-                      </div>
-                      <div className="mt-1 text-[9px] font-mono text-white/50">
-                        {lat.toFixed(4)}, {lng.toFixed(4)}
-                      </div>
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-[#111111]" />
-                    </div>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-
-        {/* 2. RentSense Tactical Control Tower Overlay (Pointer Events None) */}
-        <div className="absolute inset-0 pointer-events-none z-10">
-          {/* Tactical Crosshairs & Radar Scanner */}
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-72 rounded-full border border-white/10" />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-48 rounded-full border border-dashed border-white/15" />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-24 rounded-full border border-white/10" />
-          <div className="absolute left-1/2 top-0 bottom-0 w-px -translate-x-1/2 bg-white/10" />
-          <div className="absolute top-1/2 left-0 right-0 h-px -translate-y-1/2 bg-white/10" />
-
-          {/* Spinning Radar Beam */}
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 size-72 rounded-full bg-[conic-gradient(from_0deg,transparent_0deg,transparent_270deg,rgba(255,90,36,0.15)_360deg)] animate-radar" />
-        </div>
-
-        {/* 3. Map Overlay Controls */}
-        <div className="absolute bottom-4 right-4 flex items-center gap-2 z-20">
-          <button
-            onClick={handleCenterFleet}
-            className="flex items-center gap-1.5 rounded-lg border border-black/10 bg-white/90 px-3 py-1.5 text-xs font-medium text-black shadow-sm hover:bg-white transition-colors"
-          >
-            <Navigation className="size-3 text-[#ff5a24]" />
-            <span>Center Fleet</span>
-          </button>
-        </div>
-
-        {/* 4. Live Status Legend Bar */}
-        <div className="absolute bottom-4 left-4 hidden sm:flex items-center gap-3 rounded-lg border border-black/10 bg-white/85 px-3 py-1.5 text-[11px] backdrop-blur shadow-sm z-20">
-          <div className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-emerald-500" />
-            <span className="text-black font-medium">Active</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-amber-500" />
-            <span className="text-black font-medium">Idle</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-[#ff5a24]" />
-            <span className="text-black font-medium">Due Soon</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-red-600" />
-            <span className="text-black font-medium">Overdue</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="size-2 rounded-full bg-slate-400" />
-            <span className="text-black font-medium">Unassigned</span>
-          </div>
-        </div>
+      <div className="flex max-w-full items-center gap-1.5 overflow-x-auto rounded-xl border border-black/10 bg-white/70 p-1 text-xs">
+        <button onClick={() => handleSiteSelect("ALL")} className={cn("whitespace-nowrap rounded-lg px-3 py-1 font-medium", selectedSiteId === "ALL" ? "bg-[#111] text-white" : "text-[#555]")}>All Sites ({equipmentList.length})</button>
+        {sites.map(site => <button key={site.id} onClick={() => handleSiteSelect(site.id)} className={cn("whitespace-nowrap rounded-lg px-3 py-1 font-medium", selectedSiteId === site.id ? "bg-[#111] text-white" : "text-[#555]")}>{site.name}</button>)}
       </div>
-    </GlassCard>
-  );
+    </div>
+    <div className="relative my-6 h-80 w-full overflow-hidden rounded-2xl border border-black/15 bg-[#111] sm:h-96">
+      <div ref={mapContainerRef} className="absolute inset-0" />
+      {fallback && <div className="absolute inset-0 overflow-hidden bg-[#eae7df]">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(0,0,0,.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,.05)_1px,transparent_1px)] bg-[size:2rem_2rem]" />
+        {locatedAssets.map(({ asset, coordinate }) => <Link key={asset.id} href={`/assets/${encodeURIComponent(asset.id)}`} style={project(coordinate.latitude, coordinate.longitude)} className="group absolute z-20 -translate-x-1/2 -translate-y-1/2">
+          <span className="block size-5 rounded-full border-2 border-white shadow" style={{ backgroundColor: STATUS_CONFIG[statusFor(asset)].color }} />
+          <span className="absolute bottom-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded bg-black px-2 py-1 text-[10px] text-white group-hover:block">{asset.id} · {asset.site?.name || "Unassigned"}<br />{coordinate.latitude.toFixed(4)}, {coordinate.longitude.toFixed(4)}</span>
+        </Link>)}
+        <div className="absolute inset-x-6 top-5 rounded-lg bg-white/90 p-3 text-center text-xs text-black shadow">
+          {token ? "The geographic tiles could not be loaded. Check token permissions, URL restrictions, WebGL, and browser network errors." : "Mapbox token was not included in this frontend build. Showing relative stored positions without geographic tiles."}
+        </div>
+      </div>}
+      <button onClick={() => { setSelectedSiteId("ALL"); fitAssets(locatedAssets); }} className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5 rounded-lg bg-white/90 px-3 py-1.5 text-xs font-medium shadow"><Navigation className="size-3 text-[#ff5a24]" />Center Fleet</button>
+      {locatedAssets.length === 0 && <div className="absolute inset-0 z-20 grid place-items-center text-sm text-white/80">No valid equipment coordinates for this filter.</div>}
+    </div>
+    {locatedAssets.length < filteredAssets.length && <p className="text-xs text-amber-700">{filteredAssets.length - locatedAssets.length} asset(s) omitted because neither telemetry nor site coordinates are valid.</p>}
+  </GlassCard>;
 }

@@ -89,7 +89,7 @@ def trigger_action_from_recommendation(
             recommendation_id=rec.id,
             priority=rec.priority,
             notes=req.notes or f"Initiated from recommendation: {rec.action}",
-            actor=req.actor or "Marcus Vance",
+            actor=req.actor or "Fleet Operator",
             payload=req.payload or rec.estimated_impact,
         )
         return action

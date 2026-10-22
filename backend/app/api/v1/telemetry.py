@@ -36,13 +36,18 @@ async def ingest_telemetry(
     return record
 
 
-def _persist_telemetry(payload: TelemetryIngestRequest, db: Session):
+def _persist_telemetry(
+    payload: TelemetryIngestRequest,
+    db: Session,
+    equipment: Equipment | None = None,
+    commit: bool = True,
+):
     """
     Ingest a real-time telemetry point for an equipment asset.
     Validates physical parameters, stores in database, recalculates derived status,
     and broadcasts the event to all active Server-Sent Event (SSE) subscribers.
     """
-    equipment = db.query(Equipment).filter(Equipment.id == payload.equipment_id).first()
+    equipment = equipment or db.query(Equipment).filter(Equipment.id == payload.equipment_id).first()
     if not equipment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -64,8 +69,11 @@ def _persist_telemetry(payload: TelemetryIngestRequest, db: Session):
         created_at=datetime.now(timezone.utc),
     )
     db.add(telemetry_record)
-    db.commit()
-    db.refresh(telemetry_record)
+    if commit:
+        db.commit()
+        db.refresh(telemetry_record)
+    else:
+        db.flush()
 
     # Recalculate derived status for broadcast
     current_rental = get_current_rental(equipment)
@@ -80,9 +88,11 @@ def _persist_telemetry(payload: TelemetryIngestRequest, db: Session):
             latest_telemetry=telemetry_record,
             now=ts,
         )
-        sync_equipment_alerts(db, equipment.id, anomalies, now=ts)
+        sync_equipment_alerts(db, equipment.id, anomalies, now=ts, commit=commit)
     except Exception as e:
         db.rollback()
+        if not commit:
+            raise
         logger.warning(f"Failed to sync anomalies for equipment {equipment.id}: {e}")
 
     stream_event = TelemetryStreamEvent(

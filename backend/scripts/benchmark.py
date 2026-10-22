@@ -39,10 +39,11 @@ def main():
             sql_times.append(time.perf_counter() - starts.pop())
 
         client = TestClient(app)
-        for size in (7, 100):
-            if size > 7:
+        for size in (20, 100):
+            if size > 20:
                 with SessionLocal() as db:
-                    db.add_all(Equipment(id=f"BENCH-{i:05}", type="Excavator", dealer="Benchmark", daily_rate=100) for i in range(7, size))
+                    current = db.query(Equipment).count()
+                    db.add_all(Equipment(id=f"BENCH-{i:05}", type="Excavator", dealer="Benchmark", daily_rate=100) for i in range(current, size))
                     db.commit()
             for path in ("equipment", "dashboard", "anomalies", "recommendations", "forecasts", "impact", "equipment/EQX1001"):
                 samples, statements, sql_ms = [], [], []

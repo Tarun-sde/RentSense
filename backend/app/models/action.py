@@ -15,7 +15,7 @@ class Action(Base):
     status = Column(String(50), nullable=False, default="PENDING", index=True)  # PENDING, IN_PROGRESS, COMPLETED, CANCELLED
     priority = Column(String(50), nullable=False, default="MEDIUM", index=True)  # CRITICAL, HIGH, MEDIUM, LOW
     notes = Column(Text, nullable=True)
-    actor = Column(String(100), nullable=False, default="Marcus Vance")
+    actor = Column(String(100), nullable=False, default="Fleet Operator")
     payload_json = Column(JSON, nullable=True)  # Target site_id, operator_id, extension_days, etc.
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)

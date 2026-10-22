@@ -15,7 +15,7 @@ _test_directory = tempfile.TemporaryDirectory(prefix="rentsense-tests-")
 atexit.register(_test_directory.cleanup)
 os.environ.update(DATABASE_URL=f"sqlite:///{_test_directory.name}/tests.db",
     ENVIRONMENT="development", DEBUG="false", RESEND_API_KEY="", GEMINI_API_KEY="",
-    ADMIN_PASSWORD="isolated-test-password")
+    ADMIN_PASSWORD="isolated-test-password", TELEMETRY_SIMULATOR_ENABLED="false")
 
 from main import app
 from app.db.session import SessionLocal

@@ -65,7 +65,7 @@ export default function ActionsPage() {
 
       await completeAction(completingAction.id, {
         notes: completeNotes || `Executed ${completingAction.action_type} operation`,
-        actor: "Commander Marcus Vance",
+        actor: "Fleet Operator",
         payload,
       });
 
@@ -83,7 +83,7 @@ export default function ActionsPage() {
     try {
       await cancelAction(actionId, {
         reason: "Operator dismissed from Action Queue",
-        actor: "Commander Marcus Vance",
+        actor: "Fleet Operator",
       });
     } catch (err: unknown) {
       alert(`Error cancelling action: ${getErrorMessage(err, "Unknown error")}`);
@@ -99,7 +99,7 @@ export default function ActionsPage() {
         action_type: newType,
         priority: newPriority,
         notes: newNotes || `Manual ${newType} action initiated`,
-        actor: "Commander Marcus Vance",
+        actor: "Fleet Operator",
       });
       setNewActionModalOpen(false);
       setNewNotes("");

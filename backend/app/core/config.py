@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 
@@ -27,7 +28,11 @@ class Settings(BaseSettings):
     ALERT_DUE_SOON_HOURS: int = int(os.getenv("ALERT_DUE_SOON_HOURS", "48"))
     IDLE_HOURS_THRESHOLD: float = float(os.getenv("IDLE_HOURS_THRESHOLD", "8.0"))
     LOW_UTILIZATION_THRESHOLD: float = float(os.getenv("LOW_UTILIZATION_THRESHOLD", "0.20"))
-    SIMULATOR_INTERVAL_SECONDS: int = int(os.getenv("SIMULATOR_INTERVAL_SECONDS", "5"))
+    TELEMETRY_SIMULATOR_ENABLED: bool = False
+    SIMULATOR_INTERVAL_SECONDS: float = 60.0
+    SIMULATOR_ACTIVE_VIEWERS_ONLY: bool = True
+    SIMULATOR_IDLE_GRACE_SECONDS: float = Field(default=60.0, ge=0.0, le=3600.0)
+    SIMULATOR_MAX_EQUIPMENT_PER_CYCLE: int = Field(default=100, ge=1, le=1000)
 
     # Optional RBAC / Auth Mode (ADMIN, OPERATIONS, VIEWER)
     AUTH_ENABLED: bool = os.getenv("AUTH_ENABLED", "false").lower() in ("true", "1", "yes")
@@ -65,6 +70,11 @@ class Settings(BaseSettings):
         if self.FRONTEND_URL and self.FRONTEND_URL not in origins and self.FRONTEND_URL != "*":
             origins.append(self.FRONTEND_URL)
         return origins
+
+    @field_validator("SIMULATOR_INTERVAL_SECONDS")
+    @classmethod
+    def constrain_simulator_interval(cls, value: float) -> float:
+        return min(3600.0, max(10.0, value))
 
     @property
     def resolved_database_url(self) -> str:

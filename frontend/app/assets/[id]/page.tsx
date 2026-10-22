@@ -402,7 +402,7 @@ export default function AssetDetailPage() {
                     await triggerActionFromRecommendation(recommendations[0].id, {
                       action_type: recommendations[0].recommendation_type,
                       notes: `Executed from Asset Detail (${equipment.id}): ${recommendations[0].action}`,
-                      actor: "Commander Marcus Vance",
+                      actor: "Fleet Operator",
                       payload: recommendations[0].estimated_impact || {},
                     });
                     router.push("/actions");

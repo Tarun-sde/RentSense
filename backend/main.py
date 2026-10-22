@@ -11,6 +11,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.api.v1.router import api_v1_router
+from app.services.telemetry_simulator import telemetry_simulator
 
 # Configure Structured Logging
 log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
@@ -26,8 +27,12 @@ logger = logging.getLogger("rentsense")
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT.upper()}]")
     logger.info(f"CORS Allowed Origins: {settings.cors_origin_list}")
-    yield
-    logger.info(f"Shutting down {settings.PROJECT_NAME}")
+    await telemetry_simulator.start()
+    try:
+        yield
+    finally:
+        await telemetry_simulator.stop()
+        logger.info(f"Shutting down {settings.PROJECT_NAME}")
 
 
 app = FastAPI(
